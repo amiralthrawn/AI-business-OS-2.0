@@ -2,6 +2,7 @@ import Link from "next/link";
 import Card from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import SectionTabs from "@/components/objects/SectionTabs";
 import PageHeader from "@/components/ui/PageHeader";
 import { getCompanyNarrative, getOSActivity } from "@/lib/api";
 import { CHANNEL_DETAIL_LABEL_FR, CHANNEL_DETAIL_TO_SECTOR, SECTOR_LABEL_FR, formatTimeFR } from "@/lib/labels";
@@ -59,6 +60,7 @@ export default async function OSActivityPage({ searchParams }: { searchParams: P
         title="Activité de l'entreprise"
         description="Ce que l'OS a analysé ou recommandé, et ce que l'entreprise a vécu, par secteur — jamais une action qui n'a pas réellement eu lieu."
       />
+      <SectionTabs section="actions" active="activity" />
 
       <div className="flex flex-wrap gap-2">
         <Link

@@ -1,6 +1,7 @@
 import DecisionCard from "@/components/intelligence/DecisionCard";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import SectionTabs from "@/components/objects/SectionTabs";
 import PageHeader from "@/components/ui/PageHeader";
 import { getHomeView } from "@/lib/api";
 import type { DecisionSummary } from "@/lib/types";
@@ -26,6 +27,7 @@ export default async function DecisionIntelligencePage() {
         title="Intelligence décisionnelle"
         description="Options, recommandation et confiance produites par le moteur de Décision Intelligence à partir de vrais risques, opportunités et insights — jamais de chaîne de raisonnement affichée."
       />
+      <SectionTabs section="intelligence" active="decisions" />
       {error && <ErrorBanner message={error} />}
       {!error && (
         <div className="space-y-3">

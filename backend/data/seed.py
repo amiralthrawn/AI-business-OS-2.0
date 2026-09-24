@@ -404,7 +404,8 @@ def seed(session: Session, event_bus: EventBus) -> dict:
 def run() -> None:
     session = SessionLocal()
     try:
-        result = seed(session, build_event_bus())
+        bus = build_event_bus()
+        result = seed(session, bus)
         if result["skipped"]:
             print("Seed already applied, skipping.")
         else:
@@ -419,6 +420,13 @@ def run() -> None:
                 f"Connectors: {result['emails_ingested']} emails, {result['calendar_events_ingested']} calendar events, "
                 f"{result['website_inquiries_ingested']} website inquiries ingested."
             )
+        # V2 business objects on top of the V1 demo (idempotent, data/seed_v2.py).
+        from data.seed_v2 import seed_v2_demo
+
+        print("V2 demo data:", seed_v2_demo(session, bus))
+        from data.seed_v21 import seed_v21_demo
+
+        print("V2.1 demo data:", seed_v21_demo(session, bus))
     finally:
         session.close()
 

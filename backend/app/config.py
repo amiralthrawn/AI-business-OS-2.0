@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # cross-origin (e.g. "https://ai-business-os.vercel.app"). Unset in local
     # dev -- see cors_allowed_origins() for the resulting fallback behavior.
     allowed_origins: str | None = None
+    # V2.1 web sourcing: a Brave Search API key enables real web search for
+    # supplier sourcing. Unset -> sourcing uses internal data only, and says so.
+    brave_search_api_key: str | None = None
 
     model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 

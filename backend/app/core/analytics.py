@@ -350,3 +350,38 @@ def compute_unanswered_message_age(
     oldest = unanswered[0]  # `inbound` is already sorted ascending by occurred_at
     age_days = (now - _as_aware_utc(oldest.occurred_at)).total_seconds() / 86400
     return UnansweredMessage(entity_id, len(inbound), age_days, oldest.id, oldest.subject, oldest.body, oldest.occurred_at)
+
+
+@dataclass(frozen=True)
+class PendingQuote:
+    customer_id: object
+    sample_size: int  # sent quotes still awaiting the customer's decision
+    age_days: float | None  # age of the oldest one
+    document_id: object
+    number: str | None
+    issued_at: datetime | None
+
+
+def compute_pending_quote_age(session: Session, customer_id) -> PendingQuote:
+    """V2: how long the customer has left our oldest quote unanswered
+    (status "sent": neither accepted, refused nor expired). Read from the
+    CommercialDocument model -- the first V1 Observable input that comes
+    from V2 business objects rather than from Transactions/Communications."""
+
+    from app.core.entities import CommercialDocument, DocumentKind
+
+    quotes = (
+        session.query(CommercialDocument)
+        .filter(
+            CommercialDocument.customer_id == customer_id,
+            CommercialDocument.kind == DocumentKind.CUSTOMER_QUOTE,
+            CommercialDocument.status == "sent",
+        )
+        .all()
+    )
+    if not quotes:
+        return PendingQuote(customer_id, 0, None, None, None, None)
+    oldest = min(quotes, key=lambda q: _as_aware_utc(q.issued_at or q.created_at))
+    issued = _as_aware_utc(oldest.issued_at or oldest.created_at)
+    age = (datetime.now(timezone.utc) - issued).total_seconds() / 86400
+    return PendingQuote(customer_id, len(quotes), age, oldest.id, oldest.number, issued)

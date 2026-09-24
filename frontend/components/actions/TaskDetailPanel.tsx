@@ -81,7 +81,7 @@ export default function TaskDetailPanel({
         </div>
 
         <h2 className="mt-4 font-display text-[20px] italic text-text">{task.title}</h2>
-        <p className="mt-1 text-[11.5px] text-text-faint">Créée le {formatDateFR(task.created_at)}</p>
+        <p className="mt-1 text-[11.5px] text-text-faint">Créée le <span className="num">{formatDateFR(task.created_at)}</span></p>
 
         {task.description && (
           <div className="mt-4">
@@ -90,9 +90,9 @@ export default function TaskDetailPanel({
           </div>
         )}
 
-        {entityName && href && (
+        {href && (entityName || task.related_entity_type === "communication" || task.related_entity_type === "commercial_document") && (
           <Link href={href} className="mt-3 inline-block text-[12.5px] font-medium text-accent-strong hover:underline">
-            Voir {entityName} →
+            {entityName ? `Voir ${entityName} →` : task.related_entity_type === "communication" ? "Voir le message à valider →" : "Voir le document →"}
           </Link>
         )}
 

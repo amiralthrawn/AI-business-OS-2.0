@@ -4,53 +4,65 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type LabelKey, useLocale } from "@/lib/i18n";
 
-// Only Finance, Procurement and Sales are functional Business Domains --
-// CRM, Marketing, HR and Supply Chain deliberately have no entry here (see
-// brain/business_domains.md). No workspace switcher: the backend is
-// single-company (db.query(Company).first() everywhere), so a "change
-// company" affordance would promise multi-tenancy the app cannot deliver --
-// the company pill below is identity, not a switcher.
-const GROUPS: { labelKey: LabelKey; items: { href: string; labelKey: LabelKey }[] }[] = [
-  { labelKey: "nav.home", items: [{ href: "/", labelKey: "nav.command_center" }] },
+// V2 navigation (brain/navigation_v2.md): top-level entries are WORKSPACES
+// built around the business objects (Sales, Procurement, Catalog,
+// Communications), not one entry per object type. Customers, suppliers,
+// products, documents and contacts are reached through their workspace's
+// sub-tabs and, above all, through contextual links from related objects.
+// Each entry declares the permission that makes it visible (app/access/policy.py)
+// and the routes it "owns" for the active highlight. No workspace switcher:
+// the backend is still single-company.
+// `permission` may list alternatives ("a|b"): visible with any of them.
+type NavItem = { href: string; labelKey: LabelKey; permission: string; match: string[] };
+const GROUPS: { labelKey: LabelKey; items: NavItem[] }[] = [
+  { labelKey: "nav.home", items: [{ href: "/", labelKey: "nav.command_center", permission: "", match: ["/"] }] },
   {
-    labelKey: "nav.company_group",
+    labelKey: "nav.operations_group",
     items: [
-      { href: "/business/finance", labelKey: "nav.finance" },
-      { href: "/business/procurement", labelKey: "nav.procurement" },
-      { href: "/business/sales", labelKey: "nav.sales" },
+      { href: "/business/sales", labelKey: "nav.sales", permission: "view:sales", match: ["/business/sales", "/data/customers"] },
+      { href: "/business/procurement", labelKey: "nav.procurement", permission: "view:procurement", match: ["/business/procurement", "/data/suppliers"] },
+      { href: "/data/products", labelKey: "nav.catalog", permission: "view:catalog", match: ["/data/products", "/data"] },
+      { href: "/communications", labelKey: "nav.communications", permission: "view:communications", match: ["/communications", "/data/contacts"] },
+      { href: "/people", labelKey: "nav.people", permission: "view:people", match: ["/people"] },
     ],
   },
   {
-    labelKey: "nav.data_group",
+    labelKey: "nav.steering_group",
     items: [
-      { href: "/data", labelKey: "nav.data_entities" },
-      { href: "/data/contacts", labelKey: "nav.contacts" },
-    ],
-  },
-  {
-    labelKey: "nav.intelligence_group",
-    items: [
-      { href: "/intelligence/decision-intelligence", labelKey: "nav.decision_intelligence" },
-      { href: "/intelligence/risks", labelKey: "nav.risks" },
-      { href: "/intelligence/opportunities", labelKey: "nav.opportunities" },
+      { href: "/business/finance", labelKey: "nav.finance", permission: "view:finance", match: ["/business/finance", "/data/transactions"] },
+      { href: "/intelligence/risks", labelKey: "nav.intelligence", permission: "view:intelligence", match: ["/intelligence"] },
+      { href: "/direction", labelKey: "nav.direction", permission: "view:treasury|view:ownership", match: ["/direction"] },
     ],
   },
   {
     labelKey: "nav.actions_group",
     items: [
-      { href: "/actions/tasks", labelKey: "nav.tasks" },
-      { href: "/actions/activity", labelKey: "nav.activity" },
+      { href: "/actions/tasks", labelKey: "nav.actions", permission: "view:actions", match: ["/actions"] },
+      { href: "/ai/ask-ai", labelKey: "nav.ask_ai", permission: "action:ask_ai", match: ["/ai"] },
     ],
   },
-  { labelKey: "nav.ai_group", items: [{ href: "/ai/ask-ai", labelKey: "nav.ask_ai" }] },
 ];
 
-export default function Sidebar({ companyName, onNavigate }: { companyName: string | null; onNavigate?: () => void }) {
+export default function Sidebar({
+  companyName,
+  permissions,
+  onNavigate,
+}: {
+  companyName: string | null;
+  permissions: string[] | null;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const { t } = useLocale();
-  const activeHref = GROUPS.flatMap((g) => g.items.map((i) => i.href))
-    .filter((href) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`)))
-    .sort((a, b) => b.length - a.length)[0];
+  // Unknown permissions (API unreachable) -> show everything rather than an empty menu.
+  const visible = (item: NavItem) => !item.permission || permissions === null || item.permission.split("|").some((p) => permissions.includes(p));
+  const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter(visible) })).filter((g) => g.items.length > 0);
+  const matches = (prefix: string) => (prefix === "/" ? pathname === "/" : pathname === prefix || pathname.startsWith(`${prefix}/`));
+  const activeHref = groups
+    .flatMap((g) => g.items)
+    .map((item) => ({ href: item.href, score: Math.max(-1, ...item.match.filter(matches).map((m) => m.length)) }))
+    .filter((x) => x.score >= 0)
+    .sort((a, b) => b.score - a.score)[0]?.href;
 
   return (
     <nav className="flex h-full w-64 flex-col overflow-y-auto border-r border-border bg-surface-alt px-4 py-6">
@@ -76,7 +88,7 @@ export default function Sidebar({ companyName, onNavigate }: { companyName: stri
         </span>
       </Link>
 
-      {GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.labelKey} className="mb-5">
           <p className="px-3 pb-1.5 text-[10.5px] font-bold tracking-wider text-text-faint uppercase">{t(group.labelKey)}</p>
           <div className="flex flex-col gap-0.5">

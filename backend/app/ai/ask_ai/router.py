@@ -21,7 +21,7 @@ def ask_ai(
 ) -> AskAIResponse:
     orchestrator = AIOrchestrator(db, capability_registry, llm, event_bus)
     try:
-        result = orchestrator.ask(payload.question)
+        result = orchestrator.ask(payload.question, object_type=payload.object_type, object_id=payload.object_id)
     except OrchestratorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

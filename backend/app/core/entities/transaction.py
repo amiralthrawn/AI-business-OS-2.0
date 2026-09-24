@@ -45,6 +45,19 @@ class Transaction(Base, IdMixin, TimestampMixin):
     # or where the promise date was never recorded.
     expected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # V2: a Transaction is the posted *ledger fact* V1's analytics read; a
+    # CommercialDocument is the workflow object. When a document posts a
+    # fact (order confirmed, goods received) the fact points back to it, so
+    # every number in Finance/Intelligence can be traced to its document.
+    # Null for V1/seed transactions that predate documents.
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("commercial_documents.id"), nullable=True, index=True
+    )
+    source_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("commercial_document_lines.id"), nullable=True, index=True
+    )
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     supplier: Mapped["Supplier | None"] = relationship(back_populates="transactions")
     customer: Mapped["Customer | None"] = relationship(back_populates="transactions")
     product: Mapped["Product | None"] = relationship(back_populates="transactions")

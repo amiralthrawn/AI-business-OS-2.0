@@ -4,15 +4,20 @@ import { useState } from "react";
 import Sidebar from "@/components/layout/Sidebar";
 import Topbar from "@/components/layout/Topbar";
 import { LocaleProvider } from "@/lib/i18n";
+import type { MeRead, UserProfileRead } from "@/lib/types";
 
 export default function AppShell({
   children,
   companyName,
   pendingCount,
+  me,
+  users,
 }: {
   children: React.ReactNode;
   companyName: string | null;
   pendingCount: number;
+  me: MeRead | null;
+  users: UserProfileRead[];
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -31,10 +36,10 @@ export default function AppShell({
             mobileOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <Sidebar companyName={companyName} onNavigate={() => setMobileOpen(false)} />
+          <Sidebar companyName={companyName} permissions={me?.permissions ?? null} onNavigate={() => setMobileOpen(false)} />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar companyName={companyName} pendingCount={pendingCount} onMenuClick={() => setMobileOpen(true)} />
+          <Topbar companyName={companyName} pendingCount={pendingCount} me={me} users={users} onMenuClick={() => setMobileOpen(true)} />
           <div className="min-w-0 flex-1 overflow-y-auto">{children}</div>
         </div>
       </div>

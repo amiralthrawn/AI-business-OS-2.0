@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.access.deps import CurrentUser, get_current_user
 from app.actions.executor import ActionExecutor
 from app.actions.schemas import TaskCreate, TaskRead, TaskStatusUpdate
 from app.actions.service import ActionsError, ActionsService, TaskNotFoundError
@@ -12,6 +13,16 @@ from app.database import get_db
 from app.dependencies import get_event_bus
 
 router = APIRouter(prefix="/actions/tasks", tags=["actions"])
+
+
+def _ensure_can_decide(db: Session, user: CurrentUser, task_id: uuid.UUID) -> None:
+    """V2 permissions: approving/rejecting a proposal is scoped by the Task's
+    domain (a buyer validates procurement emails, not sales ones; the
+    director validates everything). See app.access.policy.can_approve."""
+
+    task = db.get(Task, task_id)
+    if task is not None and not user.can_approve(task.domain):
+        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas de valider cette action.")
 
 
 @router.get("", response_model=list[TaskRead])
@@ -82,7 +93,9 @@ def approve_task(
     task_id: uuid.UUID,
     db: Session = Depends(get_db),
     event_bus: EventBus = Depends(get_event_bus),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Task:
+    _ensure_can_decide(db, user, task_id)
     executor = ActionExecutor(ActionsService(db, event_bus))
     try:
         return executor.approve(task_id)
@@ -97,7 +110,9 @@ def reject_task(
     task_id: uuid.UUID,
     db: Session = Depends(get_db),
     event_bus: EventBus = Depends(get_event_bus),
+    user: CurrentUser = Depends(get_current_user),
 ) -> Task:
+    _ensure_can_decide(db, user, task_id)
     executor = ActionExecutor(ActionsService(db, event_bus))
     try:
         return executor.reject(task_id)

@@ -36,7 +36,7 @@ export default function TransactionRow({ transaction: t, party = "auto", linkPar
               </Link>
             </>
           )}{" "}
-          &middot; {formatDateFR(t.occurred_at)}
+          &middot; <span className="num">{formatDateFR(t.occurred_at)}</span>
         </p>
       </div>
       <span className="font-mono font-semibold text-text">{formatEUR(t.amount)}</span>

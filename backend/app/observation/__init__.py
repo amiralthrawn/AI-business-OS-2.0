@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.analytics import compute_unanswered_message_age
 from app.core.baseline import (
+    customer_quote_pending_baseline,
     customer_unanswered_message_baseline,
     customer_value_baseline,
     margin_baseline,
@@ -47,6 +48,15 @@ def _customer_unanswered_extra(session: Session, customer_id: uuid.UUID) -> dict
         "message_excerpt": (result.body or "")[:280],
         "message_occurred_at": result.occurred_at.isoformat() if result.occurred_at else None,
     }
+
+
+def _customer_quote_extra(session: Session, customer_id: uuid.UUID) -> dict:
+    from app.core.analytics import compute_pending_quote_age
+
+    result = compute_pending_quote_age(session, customer_id)
+    if result.document_id is None:
+        return {}
+    return {"document_id": str(result.document_id), "document_number": result.number, "pending_quotes": result.sample_size}
 
 
 def build_observable_registry() -> ObservableRegistry:
@@ -108,6 +118,19 @@ def build_observable_registry() -> ObservableRegistry:
             compute=customer_unanswered_message_baseline,
             impact_thresholds=(2.0, 5.0),
             extra_context=_customer_unanswered_extra,
+        )
+    )
+    # V2: the first Observable fed by business objects (a sent quote still
+    # awaiting the customer) -- same Baseline/Significance machinery, no new engine.
+    registry.register(
+        Observable(
+            name="customer_quote_pending_age_days",
+            domain="sales",
+            entity_type=RelatedEntityType.CUSTOMER,
+            description="Age in days of the oldest quote sent to this customer and still awaiting an answer.",
+            compute=customer_quote_pending_baseline,
+            impact_thresholds=(3.0, 10.0),
+            extra_context=_customer_quote_extra,
         )
     )
     return registry

@@ -6,8 +6,9 @@ import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import Chip from "@/components/ui/Chip";
 import Toggle from "@/components/ui/Toggle";
-import { updateBusinessContext, updateCompany } from "@/lib/api";
-import type { BusinessContextRead, CompanyRead } from "@/lib/types";
+import { createUser, setSelectedProfile, updateBusinessContext, updateCompany } from "@/lib/api";
+import { ROLE_LABEL } from "@/lib/objects";
+import type { BusinessContextRead, CompanyRead, Role } from "@/lib/types";
 
 const SIZE_OPTIONS = ["1–10", "11–50", "51–200", "200+"];
 const COUNTRY_OPTIONS = [
@@ -32,7 +33,24 @@ const SYSTEMS = [
   { key: "hr", label: "RH / Paie" },
 ] as const;
 
-const STEPS = ["Entreprise", "Organisation", "Systèmes actuels", "Récapitulatif"];
+// V2: the default sector is Travel Agency (changeable; the model stays
+// generic -- products can be stays/services, suppliers hotels/carriers).
+const DEFAULT_SECTOR = "Agence de voyage (Travel Agency)";
+const SECTOR_OPTIONS = [DEFAULT_SECTOR, "Négoce / distribution B2B", "Industrie", "Services aux entreprises", "E-commerce"];
+
+// V2 roles: the second part of the setup -- who is using the OS, in which
+// role (brain/permissions.md). Shapes navigation, editable objects and
+// the actions this person can validate.
+const ROLE_OPTIONS: { role: Role; hint: string }[] = [
+  { role: "director", hint: "Vue globale, valide toutes les actions" },
+  { role: "sales", hint: "Demandes, devis, commandes, relances clients" },
+  { role: "procurement", hint: "Demandes d'achat, fournisseurs, commandes" },
+  { role: "operations", hint: "Réceptions, livraisons, stock" },
+  { role: "hr", hint: "Communications et actions (RH à venir)" },
+  { role: "employee", hint: "Consultation et tâches" },
+];
+
+const STEPS = ["Entreprise", "Organisation", "Systèmes actuels", "Votre rôle", "Récapitulatif"];
 
 export default function OnboardingWizard({
   initialCompany,
@@ -47,7 +65,9 @@ export default function OnboardingWizard({
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState(initialCompany?.name ?? "");
-  const [industry, setIndustry] = useState(initialCompany?.industry ?? "");
+  const [industry, setIndustry] = useState(initialCompany?.industry || DEFAULT_SECTOR);
+  const [userName, setUserName] = useState("");
+  const [role, setRole] = useState<Role>("director");
   const [size, setSize] = useState(initialContext?.company_size ?? "11–50");
   const [country, setCountry] = useState(initialContext?.country ?? "FR");
   const [domains, setDomains] = useState<string[]>(initialContext?.monitored_domains ?? ["finance", "procurement", "sales"]);
@@ -76,6 +96,10 @@ export default function OnboardingWizard({
           stated_objectives: objectives.trim() || undefined,
         }),
       ]);
+      // Second part: the person and their role -> a profile selected for
+      // every following API call (cookie read by lib/api.ts).
+      const profile = await createUser({ name: userName.trim() || "Moi", role });
+      setSelectedProfile(profile.id);
       localStorage.setItem("aibos_onboarding_done", "1");
       localStorage.setItem("aibos_systems", JSON.stringify(systems));
       router.push("/");
@@ -136,6 +160,11 @@ export default function OnboardingWizard({
                 placeholder="ex. Fabrication industrielle"
                 className="w-full rounded-xl border-[1.5px] border-border-strong px-4 py-3 text-[14.5px] outline-none focus:border-accent"
               />
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {SECTOR_OPTIONS.map((opt) => (
+                  <Chip key={opt} label={opt} selected={industry === opt} onClick={() => setIndustry(opt)} />
+                ))}
+              </div>
             </div>
 
             <div className="mt-7">
@@ -245,6 +274,44 @@ export default function OnboardingWizard({
 
         {step === 3 && (
           <>
+            <h1 className="mt-3 font-display text-[32px] italic leading-tight md:text-[36px]">
+              Et vous, quel est
+              <br />
+              votre rôle&nbsp;?
+            </h1>
+            <p className="mt-3.5 max-w-lg text-[15px] text-text-soft">
+              Le rôle détermine ce que vous voyez, ce que vous pouvez modifier et les actions que vous pouvez valider. D&rsquo;autres profils se créent ensuite dans Configuration.
+            </p>
+
+            <div className="mt-9">
+              <label className="mb-2 block text-[13px] font-semibold text-text">Votre nom</label>
+              <input
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                placeholder="ex. Camille Laurent"
+                className="w-full rounded-xl border-[1.5px] border-border-strong px-4 py-3 text-[14.5px] outline-none focus:border-accent"
+              />
+            </div>
+
+            <div className="mt-7 grid gap-2.5 sm:grid-cols-2">
+              {ROLE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.role}
+                  type="button"
+                  onClick={() => setRole(opt.role)}
+                  aria-pressed={role === opt.role}
+                  className={`rounded-xl border-[1.5px] px-4 py-3 text-left transition-colors ${role === opt.role ? "border-accent bg-accent-soft" : "border-border-strong hover:border-text-faint"}`}
+                >
+                  <span className={`block text-[13.5px] font-semibold ${role === opt.role ? "text-accent-strong" : "text-text"}`}>{ROLE_LABEL[opt.role]}</span>
+                  <span className="mt-0.5 block text-[12px] text-text-faint">{opt.hint}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {step === 4 && (
+          <>
             <div className="flex flex-col items-center text-center">
               <div className="animate-pop flex h-[52px] w-[52px] items-center justify-center rounded-full bg-success">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
@@ -260,6 +327,7 @@ export default function OnboardingWizard({
 
             <div className="mt-9 divide-y divide-border rounded-2xl border border-border px-6">
               <RecapRow label="Secteur d'activité" value={industry || "Non renseigné"} />
+              <RecapRow label="Votre profil" value={`${userName.trim() || "Moi"} · ${ROLE_LABEL[role]}`} />
               <RecapRow label="Taille de l'entreprise" value={size} />
               <RecapRow label="Pays" value={COUNTRY_OPTIONS.find((c) => c.code === country)?.label ?? country} />
               <RecapRow label="Fonctions surveillées" value={domains.map((d) => DOMAIN_OPTIONS.find((o) => o.value === d)?.label ?? d).join(" · ") || "Aucune"} />

@@ -22,3 +22,8 @@ class EventLogEntry(Base, IdMixin, TimestampMixin):
     source: Mapped[str] = mapped_column(String(120), nullable=False)
     correlation_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    # V2: the object this event is primarily about (see
+    # app.core.events.subjects), so a per-object timeline is an indexed
+    # query instead of a payload scan. Null when no subject can be derived.
+    subject_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)

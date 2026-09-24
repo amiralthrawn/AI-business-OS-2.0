@@ -41,7 +41,7 @@ from app.ai.agents import AGENTS, Agent
 from app.ai.capabilities.base import CapabilityError
 from app.ai.capabilities.registry import CapabilityRegistry
 from app.ai.llm import DeterministicLLMClient, LLMClient
-from app.core.entities import Customer, Product, RelatedEntityType, Supplier
+from app.core.entities import CommercialDocument, Customer, DocumentKind, Product, RelatedEntityType, Supplier
 from app.core.events.bus import EventBus
 
 
@@ -88,6 +88,34 @@ _TASK_CREATION_NOUNS = ("task", "tâche", "tache")
 def _is_task_creation_request(question: str) -> bool:
     lowered = question.lower()
     return any(v in lowered for v in _TASK_CREATION_VERBS) and any(n in lowered for n in _TASK_CREATION_NOUNS)
+
+
+# V2 routing (business objects). A document number anywhere in the question,
+# or the page's object, selects the document; these keywords pick what to
+# compute about it.
+_MARGIN_QUESTION_KEYWORDS = ("rentab", "marge", "margin", "profit", "coût", "cout", "cost")
+_SUPPLIER_CHOICE_KEYWORDS = (
+    "quel fournisseur", "quels fournisseurs", "which supplier", "best supplier", "meilleur fournisseur",
+    "comparer les fournisseurs", "compare suppliers", "fournisseur contacter", "supplier to contact",
+)  # fmt: skip
+
+
+def _is_supplier_choice_request(question: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _SUPPLIER_CHOICE_KEYWORDS)
+
+
+def _resolve_document(session: Session, question: str, object_type: str | None, object_id: uuid.UUID | None) -> CommercialDocument | None:
+    from app.communications.service import DOCUMENT_NUMBER_RE
+
+    match = DOCUMENT_NUMBER_RE.search(question)
+    if match is not None:
+        doc = session.query(CommercialDocument).filter_by(number=match.group(0)).first()
+        if doc is not None:
+            return doc
+    if object_type == "commercial_document" and object_id is not None:
+        return session.get(CommercialDocument, object_id)
+    return None
 
 
 def _is_priorities_request(question: str) -> bool:
@@ -228,6 +256,23 @@ def _summarize_capability_result(name: str, data: dict) -> str | None:
             return "Aucun signal significatif détecté dans le périmètre surveillé."
         titles = " ; ".join(a.get("title", "") for a in areas[:3] if a.get("title"))
         return f"{len(areas)} signal(aux) détecté(s) : {titles}."
+    if name == "read_object_context" and "object" in data:
+        obj = data["object"]
+        chain = " → ".join(b["title"].split(" · ")[0] for b in data.get("breadcrumb", []))
+        related = ", ".join(f"{g['count']} {g['label'].lower()}" for g in data.get("related", []))
+        risks = [s["title"] for s in data.get("intelligence", [])]
+        parts = [f"{obj['kind_label']} {obj['title']} ({obj.get('status_label') or obj.get('status') or ''})."]
+        if " → " in chain:
+            parts.append(f"Chaîne : {chain}.")
+        if related:
+            parts.append(f"Lié à : {related}.")
+        if risks:
+            parts.append(f"Signaux ouverts : {' ; '.join(risks[:3])}.")
+        return " ".join(parts)
+    if name == "analyze_document_margin" and "margin" in data:
+        return _summarize_margin(data["margin"])
+    if name == "benchmark_suppliers" and "benchmark" in data:
+        return _summarize_benchmark(data["benchmark"])
     if name == "list_priorities":
         priorities = data.get("priorities") or []
         if not priorities:
@@ -235,6 +280,62 @@ def _summarize_capability_result(name: str, data: dict) -> str | None:
         titles = " ; ".join(p.get("title", "") for p in priorities[:3] if p.get("title"))
         return f"{len(priorities)} priorité(s) : {titles}."
     return None
+
+
+_COST_BASIS_FR = {
+    "actual": "réelle (tous les coûts sont observés)",
+    "partial": "partiellement réelle (une partie des coûts est encore estimée)",
+    "estimated": "estimée (aucun coût réel encore connu)",
+    "incomplete": "incomplète (au moins un coût est inconnu)",
+}
+
+
+def _range_eur(lo: float, hi: float) -> str:
+    return _fmt_eur(lo) if abs(hi - lo) < 0.5 else f"{_fmt_eur(lo)} à {_fmt_eur(hi)}"
+
+
+def _range_pct(lo: float | None, hi: float | None) -> str:
+    if lo is None or hi is None:
+        return "taux inconnu"
+    return _fmt_pct(lo) if abs(hi - lo) < 0.0005 else f"{_fmt_pct(lo)} à {_fmt_pct(hi)}"
+
+
+def _summarize_margin(m: dict) -> str:
+    current, planned = m["current"], m["planned"]
+    lines = [
+        f"{m['number']} — marge {_COST_BASIS_FR.get(current['cost_basis'], current['cost_basis'])} : "
+        f"{_range_eur(current['margin_min'], current['margin_max'])} ({_range_pct(current['margin_pct_min'], current['margin_pct_max'])}) "
+        f"sur {_fmt_eur(current['revenue'])} de chiffre d'affaires.",
+        f"Marge prévue au chiffrage : {_range_eur(planned['margin_min'], planned['margin_max'])} "
+        f"({_range_pct(planned['margin_pct_min'], planned['margin_pct_max'])}).",
+    ]
+    if m.get("variances"):
+        lines.append("Principaux écarts : " + " ".join(v["explanation"] for v in m["variances"][:3]))
+    if m.get("missing"):
+        lines.append("Données manquantes : " + " ; ".join(m["missing"][:3]) + ".")
+    return "\n".join(lines)
+
+
+def _span(measure: dict, unit: str) -> str:
+    if measure.get("min") is not None and measure.get("max") is not None:
+        if measure["min"] != measure["max"]:
+            return f"{measure['min']:g}–{measure['max']:g} {unit}"
+        return f"{measure['min']:g} {unit}"
+    return f"{measure['value']:g} {unit}" if measure.get("value") is not None else "inconnu"
+
+
+def _summarize_benchmark(b: dict) -> str:
+    recommended = next((c for c in b["candidates"] if c["recommended"]), None)
+    if recommended is None:
+        return " ".join(b.get("explanation", [])) or "Aucun fournisseur comparable."
+    return (
+        f"Pour {b['product_name']} ({b['quantity']:g} u.), fournisseur recommandé : {recommended['supplier_name']} "
+        f"(score {recommended['score']:.0f}/100, confiance {b['recommendation_confidence']}) — coût total "
+        f"{_span(recommended['total_cost'], 'EUR')}, délai {_span(recommended['lead_time_days'], 'jours')} "
+        f"({recommended['lead_time_days']['basis']}). "
+        + " ".join(b.get("explanation", [])[1:])
+        + f" {len(b['candidates'])} fournisseur(s) comparé(s)."
+    )
 
 
 def _deterministic_answer(context: dict) -> str:
@@ -259,6 +360,14 @@ def _deterministic_answer(context: dict) -> str:
     return "\n".join(lines)
 
 
+_DEALS_SYSTEM_PROMPT = (
+    "Tu es l'assistant d'un dirigeant de PME. Réponds en français, de façon concise, uniquement à partir des "
+    "données fournies (objets liés, marges, comparaison fournisseurs). Chaque coût porte sa nature "
+    "(observed = réel, declared = annoncé, estimated = estimé, unknown = inconnu) : ne présente JAMAIS une "
+    "estimation comme un fait et cite les fourchettes telles quelles. Si une donnée manque, dis-le."
+)
+
+
 class AIOrchestrator:
     def __init__(self, session: Session, registry: CapabilityRegistry, llm: LLMClient, event_bus: EventBus) -> None:
         self.session = session
@@ -266,15 +375,64 @@ class AIOrchestrator:
         self.llm = llm
         self.event_bus = event_bus
 
-    def ask(self, question: str) -> AskAIResult:
+    def ask(self, question: str, *, object_type: str | None = None, object_id: uuid.UUID | None = None) -> AskAIResult:
         if not question or not question.strip():
             raise OrchestratorError("Question must not be empty.")
 
         if _is_task_creation_request(question):
             return self._handle_action_request(question)
+        # V2: a question about a specific business object -- named by its
+        # number ("CMD-2026-0003") or asked from that object's page -- is
+        # answered by traversing that object's relations (deals agent).
+        document = _resolve_document(self.session, question, object_type, object_id)
+        if document is not None:
+            return self._handle_document_request(question, document)
+        if _is_supplier_choice_request(question):
+            product = _resolve_product(self.session, question)
+            if product is None and object_type == "product" and object_id is not None:
+                product = self.session.get(Product, object_id)
+            if product is not None:
+                return self._handle_supplier_choice(question, product, quantity=1.0, purchase_request_id=None)
         if _is_priorities_request(question):
             return self._handle_priorities_request(question)
         return self._handle_analytical_request(question)
+
+    # -- V2: business objects ---------------------------------------------
+
+    def _handle_document_request(self, question: str, document: CommercialDocument) -> AskAIResult:
+        """Traverses the document's relations (object graph), and -- for a
+        sales document asked about margin/cost -- walks its chain to price
+        every cost (planned vs current); for a purchase request, compares
+        the suppliers of its products."""
+
+        agent = AGENTS["deals"]
+        context: dict[str, dict] = {}
+        capabilities_used: list[str] = []
+        self._call(context, capabilities_used, "read_object_context", object_type="commercial_document", object_id=document.id)
+
+        lowered = question.lower()
+        sales_margin_kinds = {DocumentKind.CUSTOMER_REQUEST, DocumentKind.CUSTOMER_QUOTE, DocumentKind.CUSTOMER_ORDER, DocumentKind.CUSTOMER_INVOICE}
+        if document.kind in sales_margin_kinds and any(k in lowered for k in _MARGIN_QUESTION_KEYWORDS):
+            self._call(context, capabilities_used, "analyze_document_margin", document_id=document.id)
+        if document.kind == DocumentKind.PURCHASE_REQUEST or _is_supplier_choice_request(question):
+            line = next((ln for ln in document.lines if ln.product_id), None)
+            if line is not None:
+                self._call(
+                    context, capabilities_used, "benchmark_suppliers", product_id=line.product_id, quantity=line.quantity,
+                    purchase_request_id=document.id if document.kind == DocumentKind.PURCHASE_REQUEST else None,
+                )  # fmt: skip
+
+        answer = self._complete(agent.name, question, context, _DEALS_SYSTEM_PROMPT)
+        return AskAIResult(answer=answer, agent=agent.name, capabilities_used=capabilities_used, context=context)
+
+    def _handle_supplier_choice(self, question: str, product: Product, *, quantity: float, purchase_request_id) -> AskAIResult:
+        agent = AGENTS["deals"]
+        context: dict[str, dict] = {}
+        capabilities_used: list[str] = []
+        self._call(context, capabilities_used, "read_object_context", object_type="product", object_id=product.id)
+        self._call(context, capabilities_used, "benchmark_suppliers", product_id=product.id, quantity=quantity, purchase_request_id=purchase_request_id)
+        answer = self._complete(agent.name, question, context, _DEALS_SYSTEM_PROMPT)
+        return AskAIResult(answer=answer, agent=agent.name, capabilities_used=capabilities_used, context=context)
 
     # -- Action proposal (unchanged from step 10/11) -----------------------
 

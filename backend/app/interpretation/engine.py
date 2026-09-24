@@ -64,6 +64,8 @@ _METRIC_DIRECTION: dict[str, Literal["higher_is_better", "lower_is_better"]] = {
     # business scenario -- structurally identical to delivery_delay_days.
     "supplier_unanswered_message_age_days": "lower_is_better",
     "customer_unanswered_message_age_days": "lower_is_better",
+    # V2: a quote waiting longer for an answer is always worse.
+    "customer_quote_pending_age_days": "lower_is_better",
 }
 
 

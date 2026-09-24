@@ -1,262 +1,350 @@
-# AI Business OS
+# AI Business OS 2.0
 
-AI Business OS is an experimental **"operating system for the life of a company"**: instead of being another siloed ERP/CRM/BI dashboard, it tries to give a small/mid-size B2B company one place that says, in plain language, *what is happening*, *why it matters*, and *what to do about it* — with a human always in the loop before anything is actually sent, changed, or executed.
+**A decision-and-action operating system for small and mid-size companies.**
 
-It is a modular monolith: a FastAPI backend holding the real Data Core and all business/intelligence logic, and a Next.js frontend that renders it. There is no microservices split, no message queue, no vector database, and no multi-agent framework — every "intelligent" behavior described below is deterministic Python plus, in a few well-defined places, one LLM call for natural-language explanation only.
+AI Business OS gives a company one place that says, in plain language, *what is happening*, *why it matters* and *what to do next*, and then lets a human validate the action before anything is sent, changed or executed.
 
-> This is a working MVP built incrementally, one reasoned step at a time. Every decision behind it — including the ones *not* taken — is logged in [`brain/decisions.md`](brain/decisions.md). This README describes what is **actually implemented today**, not a target design.
+Most business software either stores records (ERP, CRM) or charts them (BI dashboards). AI Business OS aims at a third thing: it connects operational data, business objects and transactions, detects what deserves attention, and turns it into concrete, explainable decisions and actions, with a human always in the loop.
 
-## The problem it's trying to solve
+> **Project status:** a working MVP built incrementally as a technical portfolio project. This README describes what is **implemented today**, not a target design. Everything simulated or not yet connected is listed in [Limitations and honesty](#limitations-and-honesty). Every non-obvious design choice is recorded in [`brain/decisions.md`](brain/decisions.md).
 
-Small and mid-size companies run on a patchwork of spreadsheets, emails, and disconnected tools. Nobody has a single, honest view of "what changed, why it's significant, and what I should decide" across Finance, Procurement, Sales, and the rest of the business. Existing software either shows raw data (ERPs, CRMs) or a dashboard of charts (BI tools) — neither one tells you what to actually pay attention to, and none of them are honest about *how* they arrived at a conclusion.
+---
 
-## The product concept: MACRO → MICRO → NANO
+## Table of contents
 
-Every screen in the product is designed around one hierarchy, applied consistently instead of dumping everything at once:
+- [Vision](#vision)
+- [From V1 to V2: what fundamentally changed](#from-v1-to-v2-what-fundamentally-changed)
+- [Design principles](#design-principles)
+- [How it works](#how-it-works)
+- [Implemented capabilities](#implemented-capabilities)
+- [Product tour](#product-tour)
+- [Architecture](#architecture)
+- [Quick Start (Windows)](#quick-start-windows)
+- [Testing and quality checks](#testing-and-quality-checks)
+- [Limitations and honesty](#limitations-and-honesty)
+- [Documentation](#documentation)
 
-```text
-MACRO
-→ what matters right now
-→ what needs a decision
-→ what I can actually do about it
+---
 
-MICRO
-→ why (the reasoning trail)
-→ context (which data produced this conclusion)
-→ details for one entity (a supplier, a customer, a risk...)
+## Vision
 
-NANO
-→ raw data (a transaction, a communication, a document)
-   -- for anyone who needs to go that deep, never the default view
-```
+A company is not a set of tables. It is a web of customers, suppliers, products, quotes, orders, invoices, emails, people and cash, and every one of these relates to the others. A decision is only as good as the context around it.
 
-The Command Center (`/`) is the MACRO layer. A Risk/Opportunity/Decision detail page is MICRO. The Data pages (Suppliers/Customers/Products/Transactions) are the NANO layer.
-
-## How the AI reasoning actually works
-
-The whole "intelligence" pipeline is deterministic and explainable end to end, with the LLM restricted to producing natural-language explanations of numbers that were already computed — it never decides what is significant and never executes anything on its own:
+AI Business OS is designed around a single loop:
 
 ```text
-Company Data / History / Configuration
-                ↓
-        Business Context            (declared: size, sector, monitored domains, objectives, baselines)
-                ↓
-             Baseline                (what "normal" is for a metric: observed | declared | generic)
-                ↓
-           Significance              (is a deviation from that baseline worth surfacing?)
-                ↓
-     Business State Snapshot         (a compact, derived view of what currently matters)
-                ↓
-        AI Orchestrator              (routes a question — or "what deserves my attention?" — to...)
-                ↓
-       Targeted Capabilities         (typed read/action functions: read_supplier, analyze_margin, ...)
-                ↓
-        Decision / Action            (options + trade-offs + a recommendation, or a proposed Task)
-                ↓
-        Human Validation             (approve / reject — nothing executes without this)
-                ↓
-             Result                  (a real Task, a real status change — never simulated)
+OBJECT  →  RELATED OBJECTS  →  CONTEXT  →  INTELLIGENCE  →  DECISION  →  ACTION  →  HUMAN VALIDATION
 ```
 
-Full detail on each layer — including the deterministic classification rules and the exact limits of each one — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the per-topic files in [`brain/`](brain/).
+- **Decision-oriented.** The Command Center answers "what needs my attention and what should I decide?", not "here are forty charts".
+- **Action-oriented.** Insights end in something you can do: a draft email, a task, a purchase order, an HR decision, a website change. Each one is prepared by the system and approved by a person.
+- **Explainable.** Every conclusion shows its reasoning trail and the data it came from. Every value carries its basis (observed, declared, estimated, benchmark, simulated or unknown).
+- **Honest.** When data is missing, the product says so ("données insuffisantes", "non configuré") instead of inventing a number, a trend or an integration.
 
-## What is actually implemented
+## From V1 to V2: what fundamentally changed
 
-Backend layers, in the order data flows through them:
+**V1** established the intelligence pipeline: a Data Core, baselines, significance scoring, observation, interpretation into risks and opportunities, decision options, and a Human-in-the-loop (HITL) task executor. It reasoned mostly over flat *transactions*.
 
-| Layer | What it does | Code |
+**V2** reorganised the product around **business objects and their relationships**, so intelligence and actions work on the real shape of a company's activity. **V2.1** extended that model to people, director-level finance, compliance, sourcing and website intelligence.
+
+| Dimension | V1 | V2 / V2.1 |
 |---|---|---|
-| **Data Core** | Company, Supplier, Customer, Product, Transaction, Contact, Communication, Document, Task, Risk, Opportunity, Event Log. SQLite + SQLAlchemy 2.x + Alembic. | `backend/app/core/entities/` |
-| **Business Context** | Declared company profile (size, country, business model, monitored domains, objectives, declared baselines). Editable via API; the system also *suggests* (never auto-applies) configuration changes based on a human's past decisions. | `backend/app/business_context/` |
-| **Baseline** | What "normal" means for one metric on one entity — observed history, a declared target (always wins over observed), or a generic fallback (low confidence, explicitly marked as such). | `backend/app/core/baseline.py` |
-| **Significance** | Scores a deviation from baseline across several independent dimensions (deviation size, impact, urgency, persistence, recurrence, correlation, strategic relevance, confidence) — never collapsed into one opaque score. | `backend/app/core/significance.py` |
-| **Business State Snapshot** | A derived, compact read of what currently matters company-wide — not a second database, not a persisted cache. | `backend/app/snapshot/` |
-| **Business Observation Engine** | Generic, pluggable signal detection (an "Observable" = a metric + entity type + baseline function + thresholds). Runs on demand (`POST /observation/sweep`), not on a scheduler. | `backend/app/observation/` |
-| **Business Event Interpretation** | Turns a detected Observation into a deterministically classified `risk`/`opportunity`/`insight`/`observation`, with an LLM-written explanation only. | `backend/app/interpretation/` |
-| **Decision Intelligence** | For a classified risk/opportunity, produces 2-3 concrete options with trade-offs and a deterministically chosen recommendation (the LLM only writes the reasoning text). May propose a Task if applicable. | `backend/app/decision/` |
-| **AI Orchestrator** | Answers a targeted question (a named entity) or a cross-domain one ("why is our margin dropping?") by consulting the Snapshot, then calling only the capabilities that matter — never a blind scan of the Data Core. | `backend/app/ai/orchestrator/`, `backend/app/ai/capabilities/` |
-| **Ask AI** | The chat-style endpoint over the Orchestrator. | `backend/app/ai/ask_ai/` |
-| **Home / Command Center** | Re-reads what every layer above already produced (priorities, decisions, tasks, company narrative, OS activity) — computes nothing new itself. | `backend/app/home/` |
-| **Business Domains** | Finance / Procurement / Sales overviews (KPIs, 12-month trends, intelligence signals, recent activity) — pure composition over Data Core + analytics, no separate per-domain database. | `backend/app/domains/{finance,procurement,sales}/` |
-| **Actions / Tasks** | The one place Task rows are written. Human-in-the-loop: an AI-authored proposal is a `PENDING_VALIDATION` Task that only becomes real on explicit approval; a human-authored Task moves through `open → in_progress → done/cancelled`, or can be submitted for someone else's validation. | `backend/app/actions/` |
-| **External Connectivity** | Mock providers only (email, calendar, website) — no OAuth, no real Gmail/Outlook/Calendar connection. Demonstrates the ingestion → Data Core path the real integrations would use. | `backend/app/connectors/` |
+| **Business objects** | Suppliers, customers, products, flat transactions | Commercial documents (customer request → quote → order → delivery → invoice; purchase request → supplier quote → purchase order → reception → supplier invoice), document lines, cost items, catalog and stock, employees, candidates, bank accounts, shareholders |
+| **Relations** | Foreign keys and a single "related entity" pointer | One **relationship graph** over three storages (FKs, V1 pointers, a generic `ObjectLink` table) and a contextual API that returns any object with its breadcrumb, related objects, history, signals and allowed actions |
+| **Transactions** | Recorded facts only | Documents with a lifecycle, numbering and derivation chain, **posted** into the V1 ledger. Planned vs. actual **margin engine**, **supplier benchmark** with ranges and confidence |
+| **Intelligence** | Risks and opportunities over transactions | The same V1 engine, fed by V2 objects: late quotes, supplier cost increases, cash below the declared minimum, skill gaps, cheaper sources found. No parallel AI system |
+| **Actions** | Tasks, including AI-proposed tasks pending validation | Contextual actions on every object (derive, draft email, submit for approval, apply HR decision, apply website change) through the **same** HITL mechanism |
+| **Human-in-the-loop** | Approve or reject a proposed task | Also covers outbound email, HR decisions and website changes. Approval rights depend on role and custom per-profile access, and sensitive domains are director-only |
+| **Users** | Single implicit operator | Roles (director, sales, procurement, operations, HR, employee) with custom grants/revokes, enforced by the backend |
 
-`CRM`, `HR`, `Marketing`, and `Supply Chain` exist as empty placeholder modules (`backend/app/domains/{crm,hr,marketing,supply_chain}/`) and matching "not available yet" frontend pages — intentionally not built out, not a bug.
+## Design principles
 
-## Frontend
+1. **Modular monolith.** One FastAPI backend and one Next.js frontend. No microservices, message queue, vector database or multi-agent framework.
+2. **Deterministic first, LLM second.** Classification, scoring, margins, projections and recommendations are deterministic Python. An LLM, when configured, only rewrites explanations or drafts in natural language, and is instructed not to add facts. Without an API key, the product runs fully offline with deterministic text.
+3. **Nothing external happens without a human.** Every outbound or sensitive action becomes a `PENDING_VALIDATION` task that a person with the right permission approves or rejects.
+4. **Uncertainty is visible.** Values carry a basis and confidence, and ranges stay ranges instead of being collapsed to a midpoint. Simulated demo data is stored as simulated and shown with a red "Simulé" badge.
+5. **No invented history.** Charts use real series only, and too little history produces an explicit empty state, not an extrapolation.
 
-Next.js 16 (App Router) + TypeScript + Tailwind v4, single design system (Fraunces / Plus Jakarta Sans / IBM Plex Mono, light theme only). What's actually there today:
+## How it works
 
-- **Onboarding** (`/onboarding`) — a 4-step wizard (company, organization, current systems, summary) that writes to the real Company/BusinessContext endpoints.
-- **Command Center** (`/`) — animated KPI band (revenue/costs/margin), "à décider" / "à faire" / "ce que l'entreprise propose" / "ce qui s'est passé" / "activité de l'OS" sections, all fed by real data with honest empty states.
-- **Finance / Achats / Ventes** (`/business/*`) — KPIs, a real 12-month line chart per domain (animated, hoverable, click-to-pin a month), Finance additionally cross-references Achats vs Ventes on one chart to show margin compression/improvement.
-- **Data** (`/data`) — Suppliers/Customers/Products/Transactions as four widgets on one page, each linking to its full list and detail pages.
-- **Contacts** (`/data/contacts`) — a real communication center: per-channel connection status (email/website genuinely connected to the mock connectors; LinkedIn/Facebook/Email-marketing explicitly shown as "not configured", never faked), real contacts with a "prepare an email" (`mailto:`, never auto-sent) and "create a task" action, and a campaign widget that only fills in the funnel stages ("content" today) it actually has data for.
-- **Intelligence** (`/intelligence/*`) — Risks, Opportunities, and Decision Intelligence, each item showing its reasoning trail; Decision options are clickable and expand into their own trade-offs.
-- **Tasks** (`/actions/tasks`) — the action center: filter by sector and by lifecycle stage, open any task for full context, create a new one from a curated library of ~70 real business actions across Finance/RH/Ventes/Achats/Marketing/Direction/Opérations. Every button either performs a real, persisted state change or isn't shown.
-- **Activité de l'entreprise** (`/actions/activity`) — a unified, per-sector feed merging AI-detected activity with real logged communications, honest "no data" state per sector.
-- **Ask AI** (`/ai/ask-ai`) — the same Orchestrator the backend exposes, no separate/simulated chat logic.
-- **Settings** (`/settings`) — edits the real BusinessContext fields.
-- **FR/EN switcher** — a real, working toggle for the app's chrome and static labels (backend-generated content stays French; see Limitations).
+```text
+BUSINESS DATA + BUSINESS OBJECTS
+        ↓
+RELATIONSHIPS   one graph over FKs, V1 pointers and ObjectLink
+        ↓
+TRANSACTIONS    commercial documents → ledger facts the V1 analytics already read
+        ↓
+CONTEXT         GET /objects/{type}/{id}/context: breadcrumb, related, history, signals, actions
+        ↓
+INTELLIGENCE    Business Context → Baseline → Significance → Observation
+                → Interpretation (risk / opportunity / insight) → Decision options
+        ↓
+DECISION → ACTION → HUMAN VALIDATION → RESULT (a real status change, never simulated)
+```
 
-## Repository structure
+The AI Orchestrator answers targeted or cross-domain questions ("why is our margin dropping?") by reading a derived Business State Snapshot and calling only the typed capabilities it needs, rather than scanning the database blindly. Layer-by-layer detail lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (V1 layers) and [`brain/architecture.md`](brain/architecture.md) (V2/V2.1).
+
+## Implemented capabilities
+
+### V1 foundation (kept, now fed by V2 objects)
+
+- **Business Context** (company profile, monitored domains, objectives, declared baselines), with configuration suggestions that are never auto-applied.
+- **Baseline and Significance**: what "normal" is for a metric (observed, declared or generic), and whether a deviation matters across several independent dimensions.
+- **Observation → Interpretation → Decision**: pluggable observables, deterministic classification into risks and opportunities, and two or three decision options with trade-offs and a recommendation.
+- **Tasks and HITL executor**: the single place where tasks are written and approved actions are executed.
+- **Ask AI** over the Orchestrator, plus a `deals` agent with read capabilities over V2 objects.
+
+### V2: business objects, relations and transactions
+
+- **Commercial documents** for the full sales and purchasing flows, with statuses, numbering, derivation (quote → order → delivery → invoice) and posting into the ledger.
+- **Relationship graph and contextual API**: every object page shows its breadcrumb, related objects, timeline, open signals and the actions allowed for the current user. Forbidden actions stay visible but disabled, with the reason.
+- **Margin engine**: planned vs. current margin per order and line, with cost items (transport, customs, insurance…) and their basis.
+- **Supplier benchmark**: total cost and lead-time ranges per supplier for a given quantity, with a recommended option and its confidence.
+- **Catalog and stock**: products, supplier terms, three kinds of stock, CSV import.
+- **Communications hub**: inbox, sent and drafts, message analysis (intents, document references, suggested links), template- or LLM-assisted drafts, submission for approval, and follow-ups computed at read time (no scheduler).
+- **Roles and permissions** enforced on every router.
+
+### V2.1: people, director finance, compliance, sourcing, website
+
+- **People**: employees, labelled cost ranges, measurable contribution (never a ranking or a verdict), skills-gap analysis, candidates created from application emails, and HR decisions applied only after director approval.
+- **Director finance** (director-only by default):
+  - treasury with accounts (masked identifiers only);
+  - planned, actual and estimated cash movements, and receivables/payables read from documents;
+  - a **30/60/90-day projection as a low–high range**, with a cash-risk signal below the declared minimum;
+  - cap table, and an **estimated valuation range** (never an official value).
+- **Compliance and outside experts**: compliance matters as tasks linked to the documents they concern, a recommendation of the expertise needed, fee *estimates*, and draft requests to experts.
+- **Sourcing**: sourcing runs for purchase requests with visible steps. Leads come from known suppliers or real web results with their URL, and a price is recorded only when the source states it.
+- **Website intelligence**: limited same-domain crawl (robots.txt respected) and SEO issues with what/why/how. Change proposals are shown as diffs and approved through HITL, then *applied manually*, since there is no CMS connector.
+- **AI activity visibility**: each AI run records its real steps and mode (real, simulated or partial).
+
+### UX finishing pass
+
+- **Typography**: titles in Fraunces, interface in Plus Jakarta Sans, and **every number in IBM Plex Mono with tabular figures**, centralised in `globals.css`.
+- **Director charts**:
+  - interactive sparklines built **only from real monthly series**, with a 3-month minimum and the current month marked partial;
+  - range bars for the treasury projection against the declared minimum;
+  - a donut for the capital distribution;
+  - hover tooltips and entry animations, all respecting `prefers-reduced-motion`.
+- **Functional mailboxes** (sales@, orders@, rfq@, careers@, support@, contact@):
+  - a deterministic, displayed classification of existing messages;
+  - honest status per box: *Connectée* / *Démonstration* / *Non configurée*;
+  - an "awaiting reply" indicator, and the existing AI draft → edit → HITL send flow.
+- **Follow-up performance**: prepared, pending, validated, sent, replies and linked orders are counted as separate stages. Rates are shown only from 3 sent messages.
+- **Campaign performance**:
+  - *declared* figures (from reports) separated from *observed* counts;
+  - budget, attribution and ROI marked "not available" until real data and links exist;
+  - rule-based recommendations that state the data used and their limits.
+- **Onboarding** (5-step wizard) stays at `/onboarding` and is reachable from Configuration. Direct access to the app is unchanged.
+
+## Product tour
+
+| Area | Route | What you can do |
+|---|---|---|
+| Command Center | `/` | KPIs with real monthly trends, sector pulse, operations in progress, director view, decisions to take, pending validations |
+| Sales / Procurement / Finance | `/business/sales`, `/business/procurement`, `/business/finance` | Deals pipeline, supplier consultations and benchmark, 12-month trends, margins |
+| Documents | `/documents/[id]`, `/documents/new` | Full document lifecycle, lines, margin, derivations, related objects |
+| Catalog & stock | `/data/products` | Products, supplier terms, stock positions, CSV import |
+| Communications | `/communications` | Mailboxes, inbox, drafts and validation, follow-ups and performance, contacts, channels and campaigns, website & SEO |
+| People | `/people` | Employees, cost, contribution, skills gap, candidates, HR decisions |
+| Direction | `/direction` | Treasury, accounts, projection, cap table and valuation (director-only) |
+| Intelligence | `/intelligence/*` | Risks, opportunities and decision intelligence, each with its reasoning trail |
+| Actions & validations | `/actions/tasks`, `/actions/compliance` | Task board, approvals, compliance matters |
+| Ask AI | `/ai/ask-ai` | Questions answered by the Orchestrator |
+| Configuration | `/settings` | Business context, users, roles and custom access, link to the onboarding wizard |
+| Onboarding | `/onboarding` | Step-by-step setup (company, organisation, systems, role, summary) |
+
+Routes such as `/business/crm`, `/business/hr`, `/business/marketing`, `/business/supply-chain`, `/ai/agents`, `/ai/reports`, `/actions/emails`, `/actions/workflows`, `/actions/automations`, `/data/documents` and `/intelligence/external-intelligence` are **placeholders** ("Pas encore disponible dans ce MVP") and are not linked from the sidebar.
+
+## Architecture
+
+### Tech stack
+
+| Layer | Technologies |
+|---|---|
+| Backend | Python 3.10+, FastAPI, SQLAlchemy 2, Alembic, Pydantic v2, pydantic-settings, SQLite, pytest, `openai` SDK (optional) |
+| Frontend | Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4, ESLint 9. Charts are hand-built SVG (no charting library) |
+| Tooling | PowerShell launchers for Windows, optional Cloudflare quick tunnel for temporary public demos |
+
+### Backend modules
+
+| Module | Responsibility |
+|---|---|
+| `app/core` | Data model (entities), analytics, baseline, significance, event bus |
+| `app/objects` | Object registry, relationship graph, links, contextual API, search |
+| `app/transactions` | Document lifecycle, derivation, ledger posting, margin engine |
+| `app/catalog` | Products, supplier terms, stock, CSV import |
+| `app/domains` | Finance, procurement (incl. benchmark) and sales overviews. `crm`, `hr`, `marketing` and `supply_chain` are empty placeholders |
+| `app/observation`, `app/interpretation`, `app/decision`, `app/snapshot` | V1 intelligence pipeline |
+| `app/ai` | Orchestrator, capabilities, agents, Ask AI, LLM abstraction with a deterministic fallback |
+| `app/actions` | Task lifecycle and the HITL action executor |
+| `app/communications` | Messages, analysis, drafts, submission, follow-ups, mailboxes and performance views |
+| `app/connectors` | Mock email, calendar and website providers plus the ingestion pipeline |
+| `app/access` | Roles, permission catalog, custom access, `require()` dependency |
+| `app/people`, `app/treasury`, `app/compliance`, `app/sourcing`, `app/website` | V2.1 domains |
+| `app/home` | Command Center read model (composes, computes nothing new) |
+
+### Repository structure
 
 ```text
 AI-business-OS/
 ├── README.md
-├── .env.example
-├── start.bat                    # double-click launcher (Windows) -> start.ps1
-├── start.ps1                    # starts backend + frontend, each in its own window
-├── docs/
-│   └── ARCHITECTURE.md          # detailed architecture reference, one section per layer/step
-├── brain/                       # per-topic design notes + brain/decisions.md (the full decision log)
+├── .env.example            # configuration template (copy to .env)
+├── start.bat / start.ps1   # local launcher: backend + frontend in two windows
+├── demo.bat / demo.ps1     # optional temporary public demo via Cloudflare quick tunnels
+├── docs/ARCHITECTURE.md    # V1 architecture reference, one section per layer
+├── brain/                  # per-topic design notes and the decision log
 ├── backend/
-│   ├── app/
-│   │   ├── core/                # entities (Data Core), baseline.py, significance.py, analytics.py
-│   │   ├── observation/         # Observable registry + engine
-│   │   ├── interpretation/      # Business Event → Risk/Opportunity/Insight/Observation
-│   │   ├── decision/            # Decision Intelligence
-│   │   ├── snapshot/            # Business State Snapshot
-│   │   ├── ai/                  # orchestrator, capabilities, ask_ai
-│   │   ├── home/                # Command Center read model
-│   │   ├── domains/             # finance, procurement, sales (+ empty crm/hr/marketing/supply_chain)
-│   │   ├── actions/             # Task lifecycle + Human-in-the-Loop executor
-│   │   ├── connectors/          # mock email/calendar/website providers + ingestion
-│   │   ├── business_context/, company/, data/  # config + read APIs
-│   │   └── main.py              # FastAPI app, router wiring
-│   ├── alembic/                 # migrations
-│   ├── data/seed.py             # idempotent demo dataset + full pipeline replay
-│   ├── tests/                   # pytest suite
+│   ├── app/                # FastAPI application (modules above)
+│   ├── alembic/            # database migrations
+│   ├── data/               # seed.py (+ seed_v2.py, seed_v21.py): idempotent demo data
+│   ├── tests/              # pytest suite
 │   └── requirements.txt
 └── frontend/
-    ├── app/
-    │   ├── onboarding/          # outside the app chrome
-    │   └── (app)/               # every chrome'd route (Command Center, Business, Data, Intelligence, Actions, AI, Settings)
-    ├── components/
-    │   ├── ui/                  # design-system primitives (Card, Badge, MonthlyLineChart, ...)
-    │   ├── intelligence/, home/, actions/, data/, layout/, onboarding/, settings/, shared/
-    ├── lib/                     # api.ts, types.ts, labels.ts, i18n.tsx, action-library.ts
+    ├── app/                # Next.js routes: onboarding/ and (app)/ (the main shell)
+    ├── components/         # ui/ primitives, objects/, communications/, home/, direction/…
+    ├── lib/                # API client, types, formatting, series helpers, i18n
     └── package.json
 ```
 
-## Tech stack
+## Quick Start (Windows)
 
-- **Backend**: Python, FastAPI, SQLAlchemy 2.x, Alembic, Pydantic v2, SQLite (dev), pytest, `openai` SDK (only used when `OPENAI_API_KEY` is set — see Limitations).
-- **Frontend**: Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, ESLint 9. No external charting library — charts are hand-built SVG. No frontend test runner is configured yet (see Limitations).
+Tested on Windows 11 with Python 3.10 and Node.js 24. All commands below are **PowerShell**, run from the repository root unless stated otherwise.
 
-## Quick Start
+### Prerequisites
 
-The fastest way to run both servers locally on Windows, once the one-time setup below has been done at least once:
+- **Python 3.10+** (`python --version`)
+- **Node.js 20.9+** and npm (required by Next.js 16; `node --version`)
+- Git
 
-```text
-Double-click start.bat
+### 1. Configuration
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-The launcher (`start.bat` → `start.ps1`) starts backend and frontend **each in their own window**, so both stay running at the same time:
+The backend reads `.env` at the repository root. Every value is optional for a local run:
 
-- Backend → http://localhost:8000
-- Frontend → http://localhost:3000
+| Variable | Purpose | Default |
+|---|---|---|
+| `DATABASE_URL` | SQLite database, relative to `backend/` | `sqlite:///./data_core.db` |
+| `OPENAI_API_KEY` | Enables LLM rewording of explanations and drafts. Leave empty to run fully offline with deterministic text | empty |
+| `OPENAI_MODEL` | Model used when a key is set | `gpt-4o-mini` |
+| `ALLOWED_ORIGINS` | CORS origins for a deployed frontend. Empty = any `localhost` / `127.0.0.1` port | empty |
+| `BRAVE_SEARCH_API_KEY` | Enables real web search in supplier sourcing. Empty = internal data only, and the run says so | empty |
 
-It opens your browser on `http://localhost:3000` automatically, but only once the frontend is actually responding — never on a fixed delay. If a port is already in use (e.g. another instance is already running), it skips starting a duplicate on that port and tells you so instead. If `backend\.venv` or `frontend\node_modules` don't exist yet, it says so and points at the manual setup below rather than guessing a setup command. It contains no API keys, tokens, or credentials — it only runs the same local commands documented below.
+The frontend calls `http://localhost:8000` by default. To point it elsewhere, set `NEXT_PUBLIC_API_URL` in `frontend/.env.local`; Next.js does not read the root `.env`.
 
-Closing the launcher's own window does **not** stop the backend/frontend — each keeps running in its own window until you close that window (or Ctrl+C inside it).
+### 2. Backend: install, migrate, seed
 
-Prefer PowerShell directly? `start.bat` is just a double-clickable wrapper around:
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m data.seed
+cd ..
+```
+
+Calling the virtual environment's `python.exe` directly avoids PowerShell's script execution policy for `Activate.ps1`. The seed is **idempotent**: it loads the V1 demo company, then the V2 deals and the V2.1 simulated data, and re-running it skips what already exists.
+
+### 3. Frontend: install
+
+```powershell
+cd frontend
+npm install
+cd ..
+```
+
+### 4. Run
+
+**Option A: launcher.** Double-click `start.bat`, or from PowerShell:
 
 ```powershell
 .\start.ps1
 ```
 
-## Getting Started
+It starts the backend and the frontend in their own windows and opens the browser once the frontend responds. If a port is already in use, it skips that server and says so. Closing the launcher window does not stop the servers; close their windows (or press Ctrl+C in them).
 
-The manual method — useful the first time (setup), or if you'd rather start backend and frontend yourself in two terminals. Verified against the scripts and files actually present in this repository.
-
-### Prerequisites
-
-- Python 3.10+ (a `.venv` already exists under `backend/.venv` in this checkout; create your own with the commands below if starting fresh)
-- Node.js + npm compatible with Next.js 16 / React 19
-
-### 1. Environment file
-
-```bash
-copy .env.example .env        # Windows
-# cp .env.example .env        # macOS/Linux
-```
-
-`.env` at the repo root provides `DATABASE_URL`, `OPENAI_API_KEY` (optional — leave empty to run fully offline with deterministic French fallback text instead of LLM output), `OPENAI_MODEL`, and `NEXT_PUBLIC_API_URL`.
-
-### 2. Backend — install, migrate, seed, run
+**Option B: manual, two terminals.**
 
 ```powershell
+# Terminal 1
 cd backend
-python -m venv .venv
-.venv\Scripts\activate            # Windows; source .venv/bin/activate on macOS/Linux
-pip install -r requirements.txt
-alembic upgrade head
-python -m data.seed               # idempotent: safe to re-run, skips if already seeded
-uvicorn app.main:app --reload
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-- API: **http://localhost:8000**
-- Interactive docs (Swagger UI): **http://localhost:8000/docs**
-- Health check: **http://localhost:8000/health**
-
-### 3. Frontend — install and run
-
-```bash
+```powershell
+# Terminal 2
 cd frontend
-npm install
 npm run dev
 ```
 
-- App: **http://localhost:3000**
+| Service | URL |
+|---|---|
+| App | http://localhost:3000 |
+| API | http://localhost:8000 |
+| API docs (Swagger UI) | http://localhost:8000/docs |
+| Health check | http://localhost:8000/health |
 
-### 4. Backend tests
+On first visit, the Command Center redirects to the onboarding wizard (`/onboarding`), which you can complete or skip. The profile menu in the top bar switches between the demo user profiles (director, sales, procurement…) to see role-based navigation and permissions.
+
+### Optional: temporary public demo
+
+`demo.bat` / `demo.ps1` expose the local backend and frontend through two anonymous Cloudflare quick tunnels (`*.trycloudflare.com`). It requires [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and free ports 8000/3000. The URLs disappear when the windows are closed, and the app still runs on your machine. Only share them for short, supervised demos (see the access-control limitation below).
+
+## Testing and quality checks
 
 ```powershell
+# Backend: 359 tests at the time of writing
 cd backend
-.venv\Scripts\python.exe -m pytest -q
-```
+.\.venv\Scripts\python.exe -m pytest -q
+cd ..
 
-287 tests, all passing as of this writing.
-
-### 5. Frontend lint and build
-
-```bash
+# Frontend: lint and production build (includes type-checking)
 cd frontend
 npm run lint
 npm run build
+cd ..
 ```
 
-(`npm run start` serves the production build; there is no `npm test` script configured yet.)
+The test suite runs on isolated test databases and does not modify `backend/data_core.db`. There is no frontend unit test runner yet: ESLint and the `next build` type check are the frontend quality gates.
 
-## Current Status
+## Limitations and honesty
 
-This is a real, working MVP, not a mock-up — every number in the UI is either a live computation over the seeded Data Core or an explicit "no data available" state. That said, it has clear, honestly-stated limits:
+This is an MVP. The following are deliberate, documented limits, not hidden gaps.
 
-**Genuinely functional:**
-- The full Business Context → Baseline → Significance → Snapshot → Observation → Interpretation → Decision → Action pipeline, deterministic and inspectable end to end.
-- Human-in-the-loop on every AI-proposed action — nothing executes without explicit approval.
-- Finance/Procurement/Sales as real domains with real 12-month trends and cross-referenced margin analysis.
-- The Tasks board as a real action center with genuine lifecycle transitions.
-- FR/EN toggle for the app's own interface labels.
+### Simulated or demonstration data
 
-**Prepared but not connected to a real external system:**
-- Email/Calendar/Website "connectors" are mock providers with realistic demo data — the ingestion → Data Core pipeline is real, but there is no OAuth flow and no real Gmail/Outlook/Google Calendar/LinkedIn/Facebook account behind them. The Contacts page states this explicitly per channel ("Connecté (démonstration)" vs "Non configuré") rather than pretending otherwise.
-- The social/campaign widget shows only the one funnel stage ("content") backed by real seeded data; diffusion/engagement/conversion/retention are explicitly "unavailable", not invented.
-- "Soumettre pour validation" on a Task reuses the existing single-branch executor rather than a dedicated financial/HR workflow engine — there is no cash-flow or scenario modeling behind a "financing request" action; the human still does that analysis.
+- **The demo dataset is fictitious.** V1/V2 entities and deals come from the seed scripts. V2.1 figures (salaries, bank balances, cash movements, candidates, some messages) are stored with basis or source `simulated` and shown with a red **Simulé** badge.
+- **Email sending is simulated.** An approved email is handed to a mock provider and labelled "envoi simulé". Nothing leaves the machine.
+- **Website audits** run on a bundled demo site when no site is configured or reachable. Those runs are marked *simulated*.
 
-**Not implemented:**
-- CRM, HR, Marketing, and Supply Chain as functional domains (placeholder pages only).
-- Reports (`app/ai/reports` is an empty module).
-- Any persisted, calculated baseline (baselines are computed on the fly from history, never cached).
-- A frontend automated test suite (only ESLint + `next build`'s type-check gate today).
-- Multi-company / multi-tenant support — the backend assumes exactly one `Company` row throughout.
+### Integrations that are not connected
 
-**Next steps that are already identified (not a promise, not a roadmap invention):** unifying the two existing "priorities" computations (`brain/decisions.md` #19), a persisted baseline cache if performance ever requires it, and — if/when a real integration is wanted — implementing one real `EmailProvider`/`CalendarProvider` behind the existing connector interface without touching anything above it.
+- **Email, calendar and website "connectors" are mock providers.** The ingestion path into the Data Core is real, but there is no OAuth and no Gmail, Outlook, Google Calendar, LinkedIn, Facebook or advertising account behind it. The UI shows these channels as *Démonstration* or *Non configuré*.
+- **Functional mailboxes** (sales@, rfq@…) are a **classification of existing messages by displayed rules**, not real mailboxes. None is connected.
+- **No bank connection, accounting ledger, tax computation, e-signature or CMS.** Website changes are approved, then applied manually.
+- **Web sourcing** needs a Brave Search API key. Without it, runs are "partial" and use internal data only.
 
-## Further reading
+### Functional limits
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the architecture reference, one section per layer, written before/alongside implementation.
-- [`brain/decisions.md`](brain/decisions.md) — the full log of non-obvious decisions and why alternatives were rejected.
-- [`brain/`](brain/) — one file per topic (Business Context, Baseline/Significance, Observation Engine, Interpretation, Decision Intelligence, Connectors, Data Core, Business Domains, Home/Command Center) with the demonstrated behavior and assumed limits for each.
+- **No authentication.** The current user is selected with a profile switcher (an `X-User-Id` header). A request without that header runs in a legacy director mode. Permissions are enforced by the backend, but identity is **not verified**, so do not expose the app publicly beyond short supervised demos.
+- **Single company.** The backend assumes one `Company` row (no multi-tenancy).
+- **Marketing and campaign metrics** are mostly unavailable. There is no budget object and no link between inbound requests and a campaign, so ROI, cost per prospect and attribution are shown as "not available".
+- **Reply and follow-up detection** relies on thread keys and contacts. Mailbox classification relies on keywords and links, so some messages (newsletters, spam) are classified as needing a reply.
+- **No scheduler.** Follow-ups and observations are computed on read or on demand, and nothing is sent automatically.
+- **Placeholder modules**: CRM, HR domain module, marketing, supply chain, reports, workflows and automations (see [Product tour](#product-tour)).
+- **Interface language**: an FR/EN switch covers the interface chrome. Backend-generated content (explanations, drafts, labels) is French.
+- **Valuation, fees, costs and projections are estimates** shown as ranges with their basis, never official figures.
+
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): V1 architecture, one section per layer.
+- [`brain/architecture.md`](brain/architecture.md): V2 / V2.1 architecture and how new data feeds V1 intelligence.
+- [`brain/decisions.md`](brain/decisions.md): the decision log, including rejected alternatives.
+- Topic notes:
+  - business model and transactions: [`brain/business_object_model.md`](brain/business_object_model.md), [`brain/transactional_model.md`](brain/transactional_model.md);
+  - communications and permissions: [`brain/communications.md`](brain/communications.md), [`brain/permissions.md`](brain/permissions.md);
+  - people and finance: [`brain/people.md`](brain/people.md), [`brain/director_finance.md`](brain/director_finance.md);
+  - compliance, sourcing and website: [`brain/compliance.md`](brain/compliance.md), [`brain/sourcing.md`](brain/sourcing.md), [`brain/website_intelligence.md`](brain/website_intelligence.md);
+  - design and navigation: [`brain/design.md`](brain/design.md), [`brain/navigation_v2.md`](brain/navigation_v2.md).

@@ -1,6 +1,7 @@
 import RiskListItem from "@/components/intelligence/RiskListItem";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import SectionTabs from "@/components/objects/SectionTabs";
 import PageHeader from "@/components/ui/PageHeader";
 import { getRisks } from "@/lib/api";
 import type { RiskRead } from "@/lib/types";
@@ -19,6 +20,7 @@ export default async function RisksPage() {
   return (
     <main className="space-y-8 p-8 md:p-12">
       <PageHeader title="Risques" description="Détectés par l'Intelligence à partir de tendances réelles du Data Core — des règles déterministes, sans LLM." />
+      <SectionTabs section="intelligence" active="risks" />
       {error && <ErrorBanner message={error} />}
       {!error && (
         <ul className="space-y-3">

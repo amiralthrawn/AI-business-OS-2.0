@@ -169,7 +169,7 @@ def test_unknown_pending_action_raises_a_clean_error(db_session, event_bus):
         company_id=company.id,
         title="Some future action",
         status=TaskStatus.PENDING_VALIDATION,
-        pending_action="send_email",
+        pending_action="some_future_action",  # V2 implemented "send_email", the previous example
         correlation_id=uuid.uuid4(),
     )
     db_session.add(task)

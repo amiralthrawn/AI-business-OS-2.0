@@ -9,6 +9,12 @@ export function entityHref(type: RelatedEntityType, id: string): string | null {
   if (type === "supplier") return `/data/suppliers/${id}`;
   if (type === "customer") return `/data/customers/${id}`;
   if (type === "product") return `/data/products/${id}`;
+  // V2 objects a Task can point at (e.g. an email awaiting validation).
+  if (type === "communication") return `/communications?tab=drafts&message=${id}`;
+  if (type === "commercial_document") return `/documents/${id}`;
+  if (type === "contact") return `/communications?tab=contacts&contact=${id}`;
+  if (type === "employee") return `/people/${id}`;
+  if (type === "candidate") return `/people?tab=recruitment&candidate=${id}`;
   return null;
 }
 

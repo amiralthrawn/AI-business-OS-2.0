@@ -57,3 +57,7 @@ class BusinessContext(Base, IdMixin, TimestampMixin):
     # 15%"). Appended to by code, never by the AI rewriting past entries --
     # this is a log, not an editable profile.
     learned_notes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # V2.1 director finance settings, all DECLARED by the company:
+    # {"min_cash": float, "declared_valuation": float, "declared_valuation_date": str,
+    #  "revenue_multiple_min": float, "revenue_multiple_max": float}.
+    finance_settings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

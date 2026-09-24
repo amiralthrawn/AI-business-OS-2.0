@@ -127,6 +127,7 @@ export default function MonthlyLineChart({ series, onMonthClick }: { series: Cha
 
           {months.map((m, i) => (
             <text
+              className="num"
               key={m}
               x={xFor(i)}
               y={HEIGHT - 8}

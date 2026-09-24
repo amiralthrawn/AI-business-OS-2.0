@@ -201,3 +201,14 @@ Voir `brain/decisions.md` (#25 et suivants) pour le détail de chaque choix.
 ## État d'avancement
 
 Backend : étapes 1 à 23B implémentées et validées (scaffolding, Data Core, Events, Procurement, Intelligence réactive + monitoring proactif multi-domaines, Actions + Human-in-the-loop complet, Home/Command Center, AI cross-domaine, Business Context, External Connectivity Layer, External Data Intelligence, Business Domains). Frontend : étapes 24 à 29 (onboarding, design system V2, "vie de l'entreprise", passe UX interactive, graphiques 12 mois et Tasks comme centre d'action) — voir la section précédente. Voir `README.md` pour les commandes et `brain/` pour les décisions et le dataset de démonstration détaillés.
+
+## V2 / V2.1
+
+The V2 (business objects, relationships, transactions, roles, navigation) and
+V2.1 (custom access, people, director finance, compliance, sourcing, website
+intelligence) architecture is documented in `brain/architecture.md`, with
+`brain/business_object_model.md`, `brain/transactional_model.md`,
+`brain/navigation_v2.md`, `brain/permissions.md`, `brain/communications.md`,
+`brain/people.md`, `brain/director_finance.md`, `brain/compliance.md`,
+`brain/sourcing.md`, `brain/website_intelligence.md`, `brain/design.md` and
+decisions #30–#45 in `brain/decisions.md`.

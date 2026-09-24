@@ -1,7 +1,8 @@
 import enum
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.entities.base import Base, IdMixin, LinkableMixin, TimestampMixin
@@ -53,3 +54,14 @@ class Task(Base, IdMixin, TimestampMixin, LinkableMixin):
     # on before it can be prepared/executed (e.g. a financing request) --
     # real, persisted, never inferred at render time from the title text.
     requires_decision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # V2.1 -- reused rather than new "HR task" / "compliance request" tables:
+    # who it is assigned to (an Employee), when it is due, what kind of
+    # request it is (e.g. "contract_review", "nda", "promotion"), and the
+    # structured parameters an ActionExecutor branch needs on approval
+    # (e.g. the proposed new job title) -- a HITL proposal carries its own
+    # payload instead of hiding it in free text.
+    assignee_employee_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("employees.id"), nullable=True, index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    category: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    action_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)

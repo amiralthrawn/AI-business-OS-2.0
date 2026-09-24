@@ -40,3 +40,16 @@ class Communication(Base, IdMixin, TimestampMixin, LinkableMixin):
     # object, carried through instead of dropped. `None` whenever the
     # originating system doesn't distinguish sub-types.
     channel_detail: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # V2 email workflow. `status`: "received" | "sent" | "draft" |
+    # "pending_validation" | "rejected". A draft is a Communication row from
+    # the start, so its links to quotes/orders/contacts exist before sending.
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="received", server_default="received", index=True)
+    # The person on the other side (V1 gap: a Communication only knew its
+    # Supplier/Customer, never who wrote it -- brain/frontend_api_contract.md).
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("contacts.id"), nullable=True, index=True)
+    from_address: Mapped[str | None] = mapped_column(String(255))
+    to_address: Mapped[str | None] = mapped_column(String(500))
+    thread_key: Mapped[str | None] = mapped_column(String(255), index=True)
+    # Which assisted workflow produced a draft ("follow_up", "rfq_price", ...).
+    purpose: Mapped[str | None] = mapped_column(String(40))

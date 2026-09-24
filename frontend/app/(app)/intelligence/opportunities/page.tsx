@@ -1,6 +1,7 @@
 import OpportunityListItem from "@/components/intelligence/OpportunityListItem";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import SectionTabs from "@/components/objects/SectionTabs";
 import PageHeader from "@/components/ui/PageHeader";
 import { getOpportunities } from "@/lib/api";
 import type { OpportunityRead } from "@/lib/types";
@@ -19,6 +20,7 @@ export default async function OpportunitiesPage() {
   return (
     <main className="space-y-8 p-8 md:p-12">
       <PageHeader title="Opportunités" description="Détectées par l'Intelligence à partir de tendances réelles du Data Core — des règles déterministes, sans LLM." />
+      <SectionTabs section="intelligence" active="opportunities" />
       {error && <ErrorBanner message={error} />}
       {!error && (
         <ul className="space-y-3">

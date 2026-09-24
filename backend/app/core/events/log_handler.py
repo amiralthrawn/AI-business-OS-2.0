@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.entities.event_log import EventLogEntry
 from app.core.events.bus import EventHandler
 from app.core.events.business_event import BusinessEvent
+from app.core.events.subjects import infer_subject
 
 
 def make_event_log_handler(session_factory: Callable[[], Session]) -> EventHandler:
@@ -19,6 +20,7 @@ def make_event_log_handler(session_factory: Callable[[], Session]) -> EventHandl
     """
 
     def handle(event: BusinessEvent) -> None:
+        subject_type, subject_id = infer_subject(event.payload)
         session = session_factory()
         try:
             session.add(
@@ -29,6 +31,8 @@ def make_event_log_handler(session_factory: Callable[[], Session]) -> EventHandl
                     source=event.source,
                     correlation_id=event.correlation_id,
                     occurred_at=event.occurred_at,
+                    subject_type=subject_type,
+                    subject_id=subject_id,
                 )
             )
             session.commit()

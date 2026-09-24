@@ -47,7 +47,9 @@ export default function AnimatedNumber({
     const start = performance.now();
 
     const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / durationMs);
+      // rAF's timestamp can precede `start` on the first frame: clamp so a
+      // positive value never flashes as a negative one.
+      const t = Math.max(0, Math.min(1, (now - start) / durationMs));
       const eased = 1 - Math.pow(1 - t, 3);
 
       setDisplay(value * eased);

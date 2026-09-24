@@ -131,6 +131,12 @@ def ingest_email(session: Session, provider: EmailProvider, company_id: uuid.UUI
             related_entity_id=contact.related_entity_id,
             source=source,
             external_id=message.external_id,
+            # V2 email workflow fields: who, which thread, sent vs received.
+            status="received" if message.direction == "inbound" else "sent",
+            contact_id=contact.id,
+            from_address=message.sender,
+            to_address=", ".join(message.recipients),
+            thread_key=message.thread_id,
         )
         session.add(communication)
 
@@ -197,6 +203,7 @@ def ingest_calendar(
                 related_entity_id=related_entity_id,
                 source=source,
                 external_id=event.external_id,
+                status="sent",
             )
         )
         created += 1
@@ -236,6 +243,8 @@ def ingest_website(session: Session, provider: WebsiteProvider, company_id: uuid
                 # vs "quote_form") -- previously discarded here, a real gap
                 # found by the step 23 audit (see brain/business_domains.md).
                 channel_detail=inquiry.source,
+                status="received",
+                contact_id=contact.id,
             )
         )
         created += 1

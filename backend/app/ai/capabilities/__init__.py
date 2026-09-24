@@ -5,6 +5,11 @@ through the registry rather than importing capability modules directly."""
 from app.ai.capabilities.analyze_customer_value import analyze_customer_value_capability
 from app.ai.capabilities.analyze_margin import analyze_margin_capability
 from app.ai.capabilities.analyze_supplier_performance import analyze_supplier_performance_capability
+from app.ai.capabilities.business_objects import (
+    analyze_document_margin_capability,
+    benchmark_suppliers_capability,
+    read_object_context_capability,
+)
 from app.ai.capabilities.base import Capability, CapabilityError, CapabilityExecutionError, CapabilityNotFoundError
 from app.ai.capabilities.create_task import create_task_capability
 from app.ai.capabilities.get_business_state_snapshot import get_business_state_snapshot_capability
@@ -31,6 +36,10 @@ def build_capability_registry() -> CapabilityRegistry:
     registry.register(list_priorities_capability)
     registry.register(get_business_state_snapshot_capability)
     registry.register(create_task_capability)
+    # V2 business objects (app.ai.capabilities.business_objects)
+    registry.register(read_object_context_capability)
+    registry.register(analyze_document_margin_capability)
+    registry.register(benchmark_suppliers_capability)
     return registry
 
 

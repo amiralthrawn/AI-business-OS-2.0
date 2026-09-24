@@ -16,6 +16,8 @@ def test_registry_contains_the_mvp_observables():
         "customer_revenue_variation_pct",
         "supplier_unanswered_message_age_days",
         "customer_unanswered_message_age_days",
+        # V2: fed by business objects (sent quotes awaiting an answer)
+        "customer_quote_pending_age_days",
     }
 
 

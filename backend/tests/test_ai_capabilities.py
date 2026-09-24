@@ -51,6 +51,10 @@ def test_registry_register_get_list():
         "list_priorities",
         "get_business_state_snapshot",
         "create_task",
+        # V2 business objects (deals agent)
+        "read_object_context",
+        "analyze_document_margin",
+        "benchmark_suppliers",
     }
 
 

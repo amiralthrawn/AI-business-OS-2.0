@@ -40,6 +40,9 @@ GENERIC_BENCHMARKS: dict[str, float] = {
     "delivery_delay_days": 2.0,
     "customer_revenue_variation_pct": 0.0,
     "unanswered_message_age_days": 2.0,
+    # V2: days a customer usually takes to answer a quote before a follow-up
+    # is warranted -- a generic default, overridable via declared_baselines.
+    "quote_response_days": 7.0,
 }
 
 
@@ -195,5 +198,24 @@ def customer_unanswered_message_baseline(
         observed_value=None,
         sample_size=result.sample_size,
         declared_value=_declared(business_context, "unanswered_message_age_days"),
+    )
+    return baseline, result.age_days
+
+
+def customer_quote_pending_baseline(
+    session: Session, customer_id, business_context: BusinessContext | None = None
+) -> tuple[Baseline, float | None]:
+    """V2: age of the oldest quote still awaiting this customer's answer.
+    A point-in-time fact like the unanswered-message metrics: "normal" is
+    the company's declared `quote_response_days` or the generic default."""
+
+    from app.core.analytics import compute_pending_quote_age
+
+    result = compute_pending_quote_age(session, customer_id)
+    baseline = build_baseline(
+        "quote_response_days",
+        observed_value=None,
+        sample_size=result.sample_size,
+        declared_value=_declared(business_context, "quote_response_days"),
     )
     return baseline, result.age_days

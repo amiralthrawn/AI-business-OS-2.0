@@ -60,6 +60,25 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Numbers: every figure, amount, percentage, date-as-data, counter and chart
+   value is set in IBM Plex Mono with tabular figures. Titles stay in the
+   display font. `.num` = inline value, `.figure` = headline indicator. */
+@layer components {
+  .font-mono,
+  .num,
+  .figure {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+  .figure {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+  }
 }
 
 @keyframes fade-up {

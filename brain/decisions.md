@@ -599,3 +599,131 @@ behind the "Analyser une demande de prêt"-style templates — the human still
 does that analysis; the product only gives the task a place to live, a
 decision-required flag, and a real validation step, never a fabricated
 scenario calculator.
+
+# V2 — Business objects, relationships, transactions
+
+## 30. One `CommercialDocument` table for all ten document kinds
+
+Requests, quotes, orders, deliveries and invoices on both sides share
+numbering, statuses, lines, parties, traceability and the contextual API.
+Ten tables would have duplicated all of that; `kind` + a lifecycle table
+(`app/transactions/lifecycle.py`) keeps one code path. A customer request is
+the root of a deal. See `brain/transactional_model.md`.
+
+## 31. Documents post ledger facts; a supplier invoice revalues instead of posting
+
+V1 intelligence reads `Transaction`. Rather than rewrite it, documents post
+facts when the business event happens (order confirmed, goods received), each
+pointing back to its document. The V2 audit found V1 sums PURCHASE_ORDER +
+INVOICE as costs, so an approved supplier invoice revalues the reception
+facts instead of adding an INVOICE fact — never double-counting a purchase.
+
+## 32. One product, one customer, one representation
+
+Creating a product or customer from a quote reuses an existing one with the
+same reference/name. A supplier quoting a product creates the
+product↔supplier relation once.
+
+## 33. Follow-ups are computed at read time — no scheduler
+
+Due quotes, awaited supplier quotes and unanswered messages are computed when
+a page opens. Nothing is sent by a background job; this is stated in the UI.
+
+## 34. Every uncertain value carries its basis; ranges stay ranges
+
+observed / declared / estimated / benchmark / (V2.1) simulated / unknown,
+with a confidence where relevant. Prices, lead times, costs, margins, stock,
+salaries, cash, valuations. Never a midpoint presented as a fact.
+
+## 35. One relationship read model over three storages
+
+FKs, V1 LinkableMixin and the new many-to-many `ObjectLink` are read through
+`app/objects/graph.py`; pages, margin and the Orchestrator never care where
+a relation is stored. Integrity of ObjectLink is enforced at creation.
+
+## 36. Planned cost is frozen on the sales line
+
+Approving a supplier invoice updates catalog prices; recomputing "planned"
+from live data would erase the original estimate. The cost expected when a
+line is priced is stored on the line (with its basis) and carried quote → order.
+
+## 37. Workspaces + contextual links instead of one tab per object
+
+See `brain/navigation_v2.md`. Intelligence and Actions merged into one entry
+each; the V1 Data hub removed; documents, customers, suppliers, products are
+reached contextually.
+
+## 38. Roles + declared profiles, enforced server-side
+
+`X-User-Id` names a profile; the backend enforces permissions; no header =
+legacy director mode for V1 clients. Declared identity, not authentication
+(`brain/permissions.md`).
+
+## 39. A `deals` agent instead of editing V1 agents
+
+V1 tests pin each agent's capability set. The three V2 read capabilities
+(object context, document margin, supplier benchmark) belong to a new agent,
+used when a question names a document or is asked from an object page.
+
+# V2.1 — Strategic additions
+
+## 40. Reuse before creating
+
+HR decisions and compliance requests are `Task`s (new columns: assignee,
+due date, category, action payload) going through the existing HITL; outside
+experts are `Supplier`s with a kind and a fee range; new events use the
+existing bus and Event Log; new intelligence becomes V1 Risks/Opportunities.
+New tables only where nothing existed (employees, needs, candidates,
+accounts, movements, shareholders, sourcing leads, AI runs, website proposals).
+
+## 41. Custom access = role defaults ± director decisions
+
+`access_grants` / `access_revokes` per profile; sensitive areas
+(treasury, ownership, employee costs) director-only by default; nobody edits
+their own access; every workspace router enforces its view permission.
+
+## 42. People: estimated contribution, never a score
+
+Cost is a labelled range (benchmark charges when missing); contribution uses
+only measurable inputs, says "partielle" and "insuffisante" when so; no
+ranking; promotions/raises only after director approval.
+
+## 43. Director finance is deterministic
+
+Projection as low/high range from balances, planned movements, document
+receivables/payables and estimated flows; valuation as a range from revenue ×
+multiple (declared or benchmark); masked account identifiers only.
+
+## 44. Sourcing and website intelligence never invent and never act alone
+
+No invented supplier/price; web search only when configured; the real
+website is never modified (no CMS connector); every AI run records its real
+steps and mode (real / simulated / partial).
+
+## 45. Demo data is SIMULATED and says so
+
+V2.1 demo data (salaries, balances, candidates, messages) is stored with
+basis/source "simulated" and shown with a red "Simulé" badge.
+
+## 46. Numbers are always mono and tabular (UX pass)
+
+IBM Plex Mono + tabular figures through `.num` / `.figure` in globals.css,
+not per-page styling; titles keep the display font.
+
+## 47. Charts never invent history
+
+Sparklines use real monthly series only, trimmed before the first activity,
+with the open month marked partial and a 3-month minimum; below that the UI
+says "historique insuffisant". Trend badges are computed or absent.
+
+## 48. Functional mailboxes are a classification, not an integration
+
+sales@ / orders@ / rfq@ / careers@ / support@ / contact@ group existing
+messages by displayed rules; statuses are Connectée / Démonstration / Non
+configurée and "Connectée" requires a real provider. No account is connected.
+
+## 49. Follow-up and campaign metrics keep stages and bases apart
+
+Draft ≠ validated ≠ sent ≠ reply ≠ order; rates need 3 sends. Campaign
+figures are declared / observed / not available; no attribution without a
+real link; no marketing data is created or modified.

@@ -4,6 +4,8 @@ import DecisionToDoCard from "@/components/home/DecisionToDoCard";
 import NarrativeCard from "@/components/home/NarrativeCard";
 import OSActivityRow from "@/components/home/OSActivityRow";
 import HomeAskAI from "@/components/home/HomeAskAI";
+import HomeDirector from "@/components/home/HomeDirector";
+import HomeOperations from "@/components/home/HomeOperations";
 import TaskCard from "@/components/actions/TaskCard";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import Badge from "@/components/ui/Badge";
@@ -14,6 +16,7 @@ import PageHeader from "@/components/ui/PageHeader";
 import StatCard from "@/components/ui/StatCard";
 import { getFinanceOverview, getHomeView } from "@/lib/api";
 import { NARRATIVE_PROPOSAL_CHANNEL_DETAILS } from "@/lib/labels";
+import { monthOverMonth, monthlySpark } from "@/lib/series";
 import type { AIPriorityItem, FinanceOverview, HomeResponse } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +33,18 @@ function sectorState(priorities: AIPriorityItem[], domain: string): { label: str
   if (inDomain.some((p) => p.kind === "opportunity")) return { label: "↑ Bonne dynamique", tone: "success" };
   if (inDomain.length > 0) return { label: "→ À surveiller", tone: "warning" };
   return { label: "→ Stable", tone: "neutral" };
+}
+
+// Month-over-month badge, only when two complete months with transactions
+// exist (lib/series.ts) -- never a hard-coded "en hausse".
+function trendBadge(t: { pct: number; label: string } | null, costs: boolean): { label: string; tone: "success" | "warning" | "neutral" } | undefined {
+  if (!t) return undefined;
+  const up = t.pct > 0.02;
+  const down = t.pct < -0.02;
+  const sign = t.pct > 0 ? "+" : "";
+  const label = `${up ? "↑" : down ? "↓" : "→"} ${sign}${Math.round(t.pct * 100)} % sur un mois`;
+  if (!up && !down) return { label, tone: "neutral" };
+  return { label, tone: up !== costs ? "success" : "warning" };
 }
 
 export default async function CommandCenterPage() {
@@ -73,13 +88,27 @@ export default async function CommandCenterPage() {
           {/* INDICATEURS PRINCIPAUX -- vivants (compteurs animés), jamais un dashboard froid */}
           {finance && (
             <section className="grid gap-5 md:grid-cols-3">
-              <StatCard label="Chiffre d'affaires" value={<AnimatedNumber value={finance.total_revenue} format="EUR" />} badge={{ label: "Actif", tone: "success" }} />
-              <StatCard label="Coûts" value={<AnimatedNumber value={finance.total_costs} format="EUR" />} badge={{ label: "En hausse", tone: "warning" }} />
+              <StatCard
+                label="Chiffre d'affaires"
+                value={<AnimatedNumber value={finance.total_revenue} format="EUR" />}
+                sparkline={monthlySpark(finance.monthly_sales, "commandes clients enregistrées") ?? undefined}
+                sparklineEmpty="Historique mensuel insuffisant"
+                sparklineTone="text-accent"
+                badge={trendBadge(monthOverMonth(finance.monthly_sales), false)}
+              />
+              <StatCard
+                label="Coûts"
+                value={<AnimatedNumber value={finance.total_costs} format="EUR" />}
+                sparkline={monthlySpark(finance.monthly_purchases, "commandes d'achat et factures fournisseurs") ?? undefined}
+                sparklineEmpty="Historique mensuel insuffisant"
+                badge={trendBadge(monthOverMonth(finance.monthly_purchases), true)}
+              />
               <StatCard
                 label="Marge globale"
-                value={<AnimatedNumber value={(finance.overall_margin_pct ?? 0) * 100} format="percent" />}
+                value={finance.overall_margin_pct === null ? "—" : <AnimatedNumber value={finance.overall_margin_pct * 100} format="percent" />}
                 emphasize={(finance.overall_margin_pct ?? 0) < 0}
-                badge={(finance.overall_margin_pct ?? 0) < 0 ? { label: "Sous pression", tone: "danger" } : { label: "Sain", tone: "success" }}
+                sparklineEmpty={finance.overall_margin_pct === null ? "Pas encore de ventes chiffrées" : "Pas de série mensuelle de marge"}
+                badge={finance.overall_margin_pct === null ? undefined : finance.overall_margin_pct < 0 ? { label: "Sous pression", tone: "danger" } : { label: "Positive", tone: "success" }}
               />
             </section>
           )}
@@ -100,6 +129,12 @@ export default async function CommandCenterPage() {
               );
             })}
           </section>
+
+          {/* OPÉRATIONS EN COURS (V2) -- affaires, relances, achats, validations */}
+          <HomeOperations />
+
+          {/* VUE DIRIGEANT (V2.1) -- visible selon les accès du profil */}
+          <HomeDirector />
 
           {/* À DÉCIDER */}
           <section>

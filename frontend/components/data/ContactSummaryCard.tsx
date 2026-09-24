@@ -38,7 +38,7 @@ export default function ContactSummaryCard({ contact }: { contact: ContactListIt
 
       {contact.last_communication ? (
         <p className="mt-3 text-[12.5px] text-text-soft">
-          Dernier échange&nbsp;: {contact.last_communication.subject ?? "sans objet"} &middot; {formatDateFR(contact.last_communication.occurred_at)}
+          Dernier échange&nbsp;: {contact.last_communication.subject ?? "sans objet"} &middot; <span className="num">{formatDateFR(contact.last_communication.occurred_at)}</span>
         </p>
       ) : (
         <p className="mt-3 text-[12.5px] text-text-faint">Aucun échange enregistré.</p>

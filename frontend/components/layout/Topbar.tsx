@@ -3,15 +3,24 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import LanguageSwitcher from "@/components/layout/LanguageSwitcher";
+import ProfileSwitcher from "@/components/layout/ProfileSwitcher";
 import { type LabelKey, useLocale } from "@/lib/i18n";
+import type { MeRead, UserProfileRead } from "@/lib/types";
 
 const TITLE_KEYS: Record<string, LabelKey> = {
   "/": "nav.command_center",
   "/business/finance": "nav.finance",
   "/business/procurement": "nav.procurement",
   "/business/sales": "nav.sales",
-  "/data": "nav.data_entities",
-  "/data/contacts": "nav.contacts",
+  "/data": "nav.catalog",
+  "/data/products": "nav.catalog",
+  "/data/customers": "nav.sales",
+  "/data/suppliers": "nav.procurement",
+  "/data/transactions": "nav.finance",
+  "/communications": "nav.communications",
+  "/documents": "nav.documents",
+  "/people": "nav.people",
+  "/direction": "nav.direction",
   "/intelligence/risks": "nav.risks",
   "/intelligence/opportunities": "nav.opportunities",
   "/intelligence/decision-intelligence": "nav.decision_intelligence",
@@ -24,16 +33,22 @@ const TITLE_KEYS: Record<string, LabelKey> = {
 function titleFor(pathname: string, t: (key: LabelKey) => string): string {
   if (TITLE_KEYS[pathname]) return t(TITLE_KEYS[pathname]);
   const parent = "/" + pathname.split("/").slice(1, 3).join("/");
-  return TITLE_KEYS[parent] ? t(TITLE_KEYS[parent]) : "AI Business OS";
+  if (TITLE_KEYS[parent]) return t(TITLE_KEYS[parent]);
+  const root = "/" + pathname.split("/")[1];
+  return TITLE_KEYS[root] ? t(TITLE_KEYS[root]) : "AI Business OS";
 }
 
 export default function Topbar({
   companyName,
   pendingCount,
+  me,
+  users,
   onMenuClick,
 }: {
   companyName: string | null;
   pendingCount: number;
+  me: MeRead | null;
+  users: UserProfileRead[];
   onMenuClick: () => void;
 }) {
   const pathname = usePathname();
@@ -82,9 +97,7 @@ export default function Topbar({
           <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /></svg>
           {t("nav.ask_ai")}
         </Link>
-        <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-accent text-[12px] font-semibold text-white">
-          {(companyName ?? "OS").slice(0, 2).toUpperCase()}
-        </div>
+        <ProfileSwitcher me={me} users={users} fallbackLabel={companyName ?? "OS"} />
       </div>
     </header>
   );

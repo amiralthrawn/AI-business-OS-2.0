@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Fraunces, IBM_Plex_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
+// Registers the server-side profile resolver used by lib/api.ts (V2 roles).
+import "@/lib/server-user";
 
 const fraunces = Fraunces({
   variable: "--font-display-src",

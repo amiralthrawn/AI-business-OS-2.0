@@ -6,7 +6,13 @@ import PriorityCard from "@/components/intelligence/PriorityCard";
 import Card from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import { TRANSACTION_STATUS_LABEL, TRANSACTION_TYPE_LABEL, formatEUR } from "@/lib/labels";
-import { getCustomer } from "@/lib/api";
+import { getCustomer, getObjectContext, listDocuments } from "@/lib/api";
+import DocumentList from "@/components/objects/DocumentList";
+import ObjectActions from "@/components/objects/ObjectActions";
+import ObjectBreadcrumb from "@/components/objects/ObjectBreadcrumb";
+import ObjectTimeline from "@/components/objects/ObjectTimeline";
+import RelatedObjects from "@/components/objects/RelatedObjects";
+import SectionLabel from "@/components/objects/SectionLabel";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +25,12 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
   } catch {
     notFound();
   }
+  // V2: the object's relations, actions and documents (brain/navigation_v2.md).
+  const [context, documents] = await Promise.all([getObjectContext("customer", id), listDocuments({ customer_id: id })]);
 
   return (
     <main className="space-y-8 p-8 md:p-12">
-      <Link href="/data/customers" className="text-[13px] text-text-faint hover:text-text">
-        &larr; Retour aux clients
-      </Link>
+      <ObjectBreadcrumb section={{ label: "Ventes · Clients", href: "/business/sales?tab=customers" }} chain={context.breadcrumb} />
 
       <div className="animate-reveal flex items-start justify-between gap-4">
         <div>
@@ -33,6 +39,13 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
         </div>
         <CreateTaskButton defaultTitle={`Suivre ${customer.name}`} relatedEntityType="customer" relatedEntityId={customer.id} />
       </div>
+
+      <ObjectActions objectType="customer" objectId={customer.id} actions={context.actions} />
+
+      <section>
+        <SectionLabel>Affaires et documents</SectionLabel>
+        <DocumentList documents={documents} empty="Aucun document commercial pour l'instant." />
+      </section>
 
       {customer.contacts.length > 0 && (
         <section>
@@ -62,11 +75,11 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
           <p className="mt-2 text-[15px] font-semibold text-text">
             {customer.revenue_trend === "growing" ? "En croissance" : customer.revenue_trend === "declining" ? "En déclin" : customer.revenue_trend === "stable" ? "Stable" : "Données insuffisantes"}
           </p>
-          {customer.recent_revenue !== null && <p className="mt-1 text-[12px] text-text-faint">{formatEUR(customer.recent_revenue)} récemment</p>}
+          {customer.recent_revenue !== null && <p className="mt-1 text-[12px] text-text-faint"><span className="num">{formatEUR(customer.recent_revenue)}</span> récemment</p>}
         </Card>
         <Card className="p-6">
           <p className="text-[13px] text-text-soft">Plus ancien message sans réponse</p>
-          <p className="mt-2 text-[15px] font-semibold text-text">
+          <p className="num mt-2 text-[15px] font-semibold text-text">
             {customer.unanswered_message_age_days !== null ? `${customer.unanswered_message_age_days.toFixed(1)} jours` : "Aucun"}
           </p>
         </Card>
@@ -95,16 +108,20 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
           <span className="mb-4 block text-[11.5px] font-bold tracking-wide text-text-faint uppercase">Communications récentes</span>
           <ul className="space-y-2">
             {customer.communications.map((c) => (
-              <li key={c.id} className="rounded-xl border border-border bg-surface px-4 py-3 text-[13px]">
+              <li key={c.id} className="rounded-xl border border-border bg-surface px-4 py-3 text-[13px] transition-colors hover:border-border-strong">
+                <Link href={`/communications?message=${c.id}`} className="block">
                 <span className="text-[11px] uppercase text-text-faint">
                   {c.channel} &middot; {c.direction === "inbound" ? "reçu" : "envoyé"}
                 </span>
                 <p className="mt-0.5 text-text-soft">{c.subject ?? "(pas d'objet)"}</p>
+                </Link>
               </li>
             ))}
           </ul>
         </section>
       )}
+      <RelatedObjects groups={context.related} exclude={["commercial_document", "transaction", "communication", "contact"]} />
+      <ObjectTimeline entries={context.timeline} />
     </main>
   );
 }

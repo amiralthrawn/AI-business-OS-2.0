@@ -1,4 +1,7 @@
-export type RelatedEntityType = "company" | "supplier" | "customer" | "product" | "transaction";
+export type RelatedEntityType = "company" | "supplier" | "customer" | "product" | "transaction" | "contact" | "communication" | "commercial_document" | "employee" | "candidate";
+
+export * from "@/lib/types-v2";
+export * from "@/lib/types-v21";
 
 export interface RiskRead {
   id: string;

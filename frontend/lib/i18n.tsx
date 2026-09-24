@@ -34,6 +34,19 @@ const DICT = {
   "nav.live": { fr: "Data Core · en direct", en: "Data Core · live" },
   "topbar.open_menu": { fr: "Ouvrir le menu", en: "Open menu" },
   "topbar.pending": { fr: "action(s) en attente de validation", en: "action(s) pending validation" },
+  // V2 navigation (brain/navigation_v2.md)
+  "nav.operations_group": { fr: "Opérations", en: "Operations" },
+  "nav.steering_group": { fr: "Pilotage", en: "Steering" },
+  "nav.catalog": { fr: "Catalogue & stock", en: "Catalog & stock" },
+  "nav.communications": { fr: "Communications", en: "Communications" },
+  "nav.intelligence": { fr: "Intelligence", en: "Intelligence" },
+  "nav.actions": { fr: "Actions & validations", en: "Actions & approvals" },
+  "nav.documents": { fr: "Document", en: "Document" },
+  "topbar.profile": { fr: "Profil", en: "Profile" },
+  // V2.1
+  "nav.people": { fr: "Équipe", en: "Team" },
+  "nav.direction": { fr: "Direction", en: "Leadership" },
+  "topbar.no_profile": { fr: "Aucun profil (accès complet)", en: "No profile (full access)" },
 } as const;
 
 export type LabelKey = keyof typeof DICT;

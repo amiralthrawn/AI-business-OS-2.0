@@ -8,13 +8,15 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import MonthlyLineChart from "@/components/ui/MonthlyLineChart";
 import PageHeader from "@/components/ui/PageHeader";
 import StatCard from "@/components/ui/StatCard";
-import { getFinanceOverview } from "@/lib/api";
+import OrderMargins from "@/components/objects/OrderMargins";
+import { getFinanceOverview, getOrderMargins } from "@/lib/api";
 import { formatPercent } from "@/lib/labels";
-import type { FinanceOverview } from "@/lib/types";
+import type { FinanceOverview, OrderMarginRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function FinancePage() {
+  const orderMargins: OrderMarginRow[] = await getOrderMargins().catch(() => []);
   let overview: FinanceOverview | null = null;
   let error: string | null = null;
   try {
@@ -45,6 +47,8 @@ export default async function FinancePage() {
               emphasize={(overview.overall_margin_pct ?? 0) < 0}
             />
           </section>
+
+          <OrderMargins rows={orderMargins} />
 
           <section>
             <span className="mb-4 block text-[11.5px] font-bold tracking-wide text-text-faint uppercase">

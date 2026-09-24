@@ -1,5 +1,6 @@
 import TaskBoard from "@/components/actions/TaskBoard";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import SectionTabs from "@/components/objects/SectionTabs";
 import PageHeader from "@/components/ui/PageHeader";
 import { getCustomers, getSuppliers, getTasks } from "@/lib/api";
 import type { TaskRead } from "@/lib/types";
@@ -27,6 +28,7 @@ export default async function TasksPage() {
         title="Tâches"
         description="Le centre d'action de l'entreprise. Inclut les actions proposées par l'IA en attente de validation — rien ne s'exécute automatiquement."
       />
+      <SectionTabs section="actions" active="tasks" />
       {error && <ErrorBanner message={error} />}
       {!error && <TaskBoard initialTasks={tasks} entityNames={entityNames} />}
     </main>

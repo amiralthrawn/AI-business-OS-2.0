@@ -12,6 +12,7 @@ OBSERVABLE_LABEL_FR: dict[str, str] = {
     "customer_revenue_variation_pct": "le chiffre d'affaires client",
     "supplier_unanswered_message_age_days": "les messages fournisseur sans réponse",
     "customer_unanswered_message_age_days": "les messages client sans réponse",
+    "customer_quote_pending_age_days": "les devis client en attente de réponse",
 }
 
 IMPACT_LABEL_FR: dict[str, str] = {"low": "faible", "medium": "moyen", "high": "élevé"}

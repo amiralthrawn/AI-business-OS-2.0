@@ -61,4 +61,4 @@ def test_only_procurement_can_create_tasks():
 
 
 def test_agents_registry_contains_all_mvp_agents():
-    assert set(AGENTS.keys()) == {"finance", "procurement", "sales", "priorities"}
+    assert set(AGENTS.keys()) == {"finance", "procurement", "sales", "priorities", "deals"}  # "deals": V2 business-object agent

@@ -33,6 +33,33 @@ class RelatedEntityType(str, enum.Enum):
     CUSTOMER = "customer"
     PRODUCT = "product"
     TRANSACTION = "transaction"
+    # V2: the business objects a Task/Risk/Contact/Communication can now
+    # point at directly (e.g. a follow-up Task on a quote, a draft email).
+    CONTACT = "contact"
+    COMMUNICATION = "communication"
+    COMMERCIAL_DOCUMENT = "commercial_document"
+    # V2.1: people objects a Task can point at (a promotion proposal, an interview).
+    EMPLOYEE = "employee"
+    CANDIDATE = "candidate"
+
+
+class ValueBasis(str, enum.Enum):
+    """Where a value comes from (V2). Never collapsed: an ESTIMATED 14 days is
+    not an OBSERVED 14 days, and the UI must be able to say which one it is.
+
+    - OBSERVED: measured from real records (an invoice, a reception date).
+    - DECLARED: stated by a party (a supplier quote, a catalog price, a PO).
+    - ESTIMATED: computed/assumed by us (a reference unit cost, a transport guess).
+    - BENCHMARK: a generic market/sector reference, not specific to this case.
+    - SIMULATED: demonstration data, not from the company's real systems.
+    - UNKNOWN: no usable source -- shown as unknown, never filled in."""
+
+    OBSERVED = "observed"
+    DECLARED = "declared"
+    ESTIMATED = "estimated"
+    BENCHMARK = "benchmark"
+    SIMULATED = "simulated"
+    UNKNOWN = "unknown"
 
 
 class LinkableMixin:
