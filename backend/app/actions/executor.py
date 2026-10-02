@@ -101,4 +101,10 @@ class ActionExecutor:
             from app.website.service import finalize_website_change
 
             return finalize_website_change(self.actions_service.session, self.actions_service.event_bus, task)
+        if task.pending_action == "validate_credit_note":
+            # V2.2: a customer-accepted credit note, validated internally
+            # before it can touch the customer's balance (app.billing).
+            from app.billing.service import finalize_credit_validation
+
+            return finalize_credit_validation(self.actions_service.session, self.actions_service.event_bus, task)
         raise UnknownActionError(f"No executor registered for action '{task.pending_action}'")

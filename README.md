@@ -20,6 +20,7 @@ Most business software either stores records (ERP, CRM) or charts them (BI dashb
 - [Product tour](#product-tour)
 - [Architecture](#architecture)
 - [Quick Start (Windows)](#quick-start-windows)
+- [Deploying on Render](#deploying-on-render)
 - [Testing and quality checks](#testing-and-quality-checks)
 - [Limitations and honesty](#limitations-and-honesty)
 - [Documentation](#documentation)
@@ -161,7 +162,7 @@ Routes such as `/business/crm`, `/business/hr`, `/business/marketing`, `/busines
 
 | Layer | Technologies |
 |---|---|
-| Backend | Python 3.10+, FastAPI, SQLAlchemy 2, Alembic, Pydantic v2, pydantic-settings, SQLite, pytest, `openai` SDK (optional) |
+| Backend | Python 3.10+, FastAPI, SQLAlchemy 2, Alembic, Pydantic v2, pydantic-settings, SQLite (local) or PostgreSQL (psycopg 3), pytest, `openai` SDK (optional) |
 | Frontend | Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4, ESLint 9. Charts are hand-built SVG (no charting library) |
 | Tooling | PowerShell launchers for Windows, optional Cloudflare quick tunnel for temporary public demos |
 
@@ -226,13 +227,13 @@ The backend reads `.env` at the repository root. Every value is optional for a l
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `DATABASE_URL` | SQLite database, relative to `backend/` | `sqlite:///./data_core.db` |
+| `DATABASE_URL` | SQLite file (relative to `backend/`) or a PostgreSQL URL (`postgres://…` / `postgresql://…` are accepted as-is) | `sqlite:///./data_core.db` |
 | `OPENAI_API_KEY` | Enables LLM rewording of explanations and drafts. Leave empty to run fully offline with deterministic text | empty |
 | `OPENAI_MODEL` | Model used when a key is set | `gpt-4o-mini` |
 | `ALLOWED_ORIGINS` | CORS origins for a deployed frontend. Empty = any `localhost` / `127.0.0.1` port | empty |
 | `BRAVE_SEARCH_API_KEY` | Enables real web search in supplier sourcing. Empty = internal data only, and the run says so | empty |
 
-The frontend calls `http://localhost:8000` by default. To point it elsewhere, set `NEXT_PUBLIC_API_URL` in `frontend/.env.local`; Next.js does not read the root `.env`.
+The frontend calls `http://localhost:8000` by default. To point it elsewhere, set `NEXT_PUBLIC_API_URL` in `frontend/.env.local` (template: [`frontend/.env.example`](frontend/.env.example); never committed); Next.js does not read the root `.env`. The value is compiled into the browser bundle when `npm run dev` starts, so **restart `npm run dev` after changing it**. The terminal prints `[AI Business OS] Browser API URL: …` at startup so you can check it.
 
 ### 2. Backend: install, migrate, seed
 
@@ -292,10 +293,57 @@ On first visit, the Command Center redirects to the onboarding wizard (`/onboard
 
 `demo.bat` / `demo.ps1` expose the local backend and frontend through two anonymous Cloudflare quick tunnels (`*.trycloudflare.com`). It requires [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and free ports 8000/3000. The URLs disappear when the windows are closed, and the app still runs on your machine. Only share them for short, supervised demos (see the access-control limitation below).
 
+To do the same by hand, in four terminals, in this order:
+
+```powershell
+# 1. Backend (local mode: ALLOWED_ORIGINS empty accepts localhost and https://*.trycloudflare.com)
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+
+# 2. Backend tunnel: note the https://<random>.trycloudflare.com URL it prints
+cloudflared tunnel --url http://localhost:8000
+
+# 3. Frontend, started WITH that backend URL (restart it whenever the backend tunnel changes)
+cd frontend
+$env:NEXT_PUBLIC_API_URL = "<backend tunnel URL from step 2>"
+npm run dev
+
+# 4. Frontend tunnel: share the URL it prints
+cloudflared tunnel --url http://localhost:3000
+```
+
+Quick Tunnel URLs change on every restart and are never stored in the code or config. If the page shows `Load failed` (Safari) or `Failed to fetch` (Chrome), the frontend is almost always still pointing at an expired backend tunnel: check the `Browser API URL` line printed by `npm run dev` and restart it with the current URL.
+
+## Deploying on Render
+
+The repository runs as two Render web services from the same GitHub repository. Nothing is hard-coded: everything comes from environment variables.
+
+**Backend** (Python web service, root directory `backend`)
+
+| Setting | Value |
+|---|---|
+| Build command | `pip install -r requirements.txt` |
+| Start command | `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| `DATABASE_URL` | The Render PostgreSQL **internal** URL (recommended), or `sqlite:////var/data/data_core.db` with a persistent disk mounted on `/var/data`. Without one of them, data is lost at each deploy. |
+| `ALLOWED_ORIGINS` | The frontend URL, e.g. `https://<frontend>.onrender.com` (comma-separated if several). When set, only these origins are accepted: no `localhost`, no tunnels. |
+| `OPENAI_API_KEY`, `BRAVE_SEARCH_API_KEY` | Optional. |
+
+Load the demo data once, from the backend service's shell: `python -m data.seed` (idempotent).
+
+**Frontend** (Node web service, root directory `frontend`)
+
+| Setting | Value |
+|---|---|
+| Build command | `npm ci && npm run build` |
+| Start command | `npm run start -- -p $PORT` |
+| `NEXT_PUBLIC_API_URL` | The backend URL, e.g. `https://<backend>.onrender.com`. It is compiled into the build: change it, then redeploy. |
+
+The migrations and the full demo seed were validated on PostgreSQL as well as SQLite. The access-control limitation below applies: identity is not verified, so keep a public deployment for supervised demos.
+
 ## Testing and quality checks
 
 ```powershell
-# Backend: 359 tests at the time of writing
+# Backend: 390 tests at the time of writing
 cd backend
 .\.venv\Scripts\python.exe -m pytest -q
 cd ..

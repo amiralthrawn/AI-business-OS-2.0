@@ -149,7 +149,8 @@ export default function DocumentLines({ doc, canEdit }: { doc: DocumentDetail; c
         </div>
       )}
 
-      {(doc.cost_items.length > 0 || canEdit) && (
+      {/* Transport, customs... are costs of goods flows, not of a credit note. */}
+      {(doc.cost_items.length > 0 || (canEdit && doc.kind !== "customer_credit_note" && doc.kind !== "supplier_credit_note")) && (
         <div>
           <p className="mb-2 text-[12.5px] font-semibold text-text-soft">Coûts annexes</p>
           {doc.cost_items.length > 0 && (

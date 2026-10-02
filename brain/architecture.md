@@ -44,6 +44,7 @@ microservices, no queue, no vector DB, no new agent per feature.
 | `app/sourcing` | Sourcing runs and leads for purchase requests. | V2.1 |
 | `app/website` | Limited site crawl, SEO issues, change proposals (HITL). | V2.1 |
 | `app/ai` | V1 orchestrator + `deals` agent with 3 read capabilities over V2 objects. | V2 |
+| `app/billing` | Payments, instalments, customer/supplier balances, credit notes (HITL validation, single imputation, refunds), delivery follow-up, non-conformities. Derived views only. | V2.2 |
 
 Every workspace router declares its view permission (`app/main.py`); sensitive
 ones (treasury, ownership, employee costs) are director-only by default.

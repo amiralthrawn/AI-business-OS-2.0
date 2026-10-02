@@ -35,6 +35,14 @@ sends anything** (#33).
 - "Site web & SEO" tab (see `brain/website_intelligence.md`).
 - Simulated demo messages are labelled "message simulé".
 
+## V2.2 purposes
+
+`credit_note_offer` (propose a credit note: sending it marks the credit note
+"submitted"), `supplier_claim` (claim / credit note request to a supplier),
+`payment_reminder` (overdue invoice). Sending `order_confirmation` marks the
+order "transmitted" -- never "acknowledged", which only the customer can do.
+See `brain/billing.md`.
+
 ## Limits
 
 No real Gmail/Outlook, no threading beyond `thread_key`, no attachments

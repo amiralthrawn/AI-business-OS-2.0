@@ -94,19 +94,36 @@ def _document_flows(session: Session, company_id: uuid.UUID, now: datetime) -> l
         CommercialDocument.company_id == company_id,
         CommercialDocument.kind.in_([DocumentKind.CUSTOMER_INVOICE, DocumentKind.SUPPLIER_INVOICE, DocumentKind.CUSTOMER_ORDER]),
     )
+    from app.billing.service import credit_view, settlement
+
     for doc in docs.all():
         total = sum(ln.quantity * ln.unit_price for ln in doc.lines if ln.unit_price is not None)
         if not total:
             continue
         due = _as_aware_utc(doc.due_at) if doc.due_at else _as_aware_utc(doc.issued_at or doc.created_at) + timedelta(days=DEFAULT_PAYMENT_DELAY_DAYS)
         due = max(due, now)
-        if doc.kind == DocumentKind.CUSTOMER_INVOICE and doc.status == "issued":
-            flows.append(Flow(due, "in", total, "declared", "customer_payment", f"Facture client {doc.number}", document_id=doc.id, source="document"))
-        elif doc.kind == DocumentKind.SUPPLIER_INVOICE and doc.status in {"received", "approved"}:
-            flows.append(Flow(due, "out", total, "declared", "supplier_payment", f"Facture fournisseur {doc.number}", document_id=doc.id, source="document"))
+        invoice_open = (doc.kind == DocumentKind.CUSTOMER_INVOICE and doc.status in {"issued", "partially_paid"}) or (
+            doc.kind == DocumentKind.SUPPLIER_INVOICE and doc.status in {"received", "approved", "disputed", "partially_paid"}
+        )
+        if invoice_open:
+            view = settlement(session, doc, now)
+            if not view.get("available"):
+                continue
+            direction, category, label = ("in", "customer_payment", "Facture client") if doc.kind == DocumentKind.CUSTOMER_INVOICE else ("out", "supplier_payment", "Facture fournisseur")
+            for inst in view["installments"]:
+                if inst["remaining"] > 0.005:
+                    when = max(inst["due_at"] or due, now)
+                    suffix = f" — {inst['label']}" if view["installments_count"] > 1 else ""
+                    flows.append(Flow(when, direction, inst["remaining"], "declared", category, f"{label} {doc.number}{suffix}", document_id=doc.id, source="document"))
         elif doc.kind == DocumentKind.CUSTOMER_ORDER and doc.status in {"confirmed", "delivered"}:
             # Not invoiced yet: the cash is expected, not committed.
             flows.append(Flow(due + timedelta(days=DEFAULT_PAYMENT_DELAY_DAYS), "in", total, "estimated", "customer_payment", f"Commande {doc.number} (non facturée)", document_id=doc.id, source="document"))
+    # Refunds owed on imputed credit notes are committed outflows.
+    credit_notes = session.query(CommercialDocument).filter(CommercialDocument.company_id == company_id, CommercialDocument.kind == DocumentKind.CUSTOMER_CREDIT_NOTE, CommercialDocument.status == "applied")
+    for cn in credit_notes.all():
+        refund = credit_view(session, cn)["refund_due"]
+        if refund > 0.005:
+            flows.append(Flow(now + timedelta(days=7), "out", refund, "declared", "customer_refund", f"Remboursement avoir {cn.number}", document_id=cn.id, source="document"))
     return flows
 
 

@@ -62,18 +62,33 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
       {active === "overview" && <Overview />}
       {active === "deals" && <DealPipeline deals={await listDocuments({ kind: ["customer_request"] })} />}
       {active === "quotes" && <DocumentList documents={await listDocuments({ kind: ["customer_quote"] })} empty="Aucun devis." showKind={false} />}
-      {active === "orders" && (
-        <div className="space-y-8">
-          <DocumentList documents={await listDocuments({ kind: ["customer_order"] })} empty="Aucune commande client." showKind={false} />
-          <section>
-            <SectionLabel>Livraisons et factures clients</SectionLabel>
-            <DocumentList documents={await listDocuments({ kind: ["customer_delivery", "customer_invoice"] })} empty="Aucune livraison ni facture." />
-          </section>
-        </div>
-      )}
+      {active === "orders" && <Orders />}
       {active === "followups" && followUps && <FollowUpList items={salesFollowUps} note={followUps.note} canDraft={can(me?.permissions, "write:communications")} />}
       {active === "customers" && <Customers />}
     </main>
+  );
+}
+
+// Orders, with the ones still waiting for the customer on top (transmitted /
+// acknowledged, not confirmed), then deliveries, invoices and credit notes.
+async function Orders() {
+  const orders = await listDocuments({ kind: ["customer_order"] }).catch(() => []);
+  const waiting = orders.filter((o) => o.status === "sent" || o.status === "acknowledged");
+  return (
+    <div className="space-y-8">
+      {waiting.length > 0 && (
+        <section>
+          <SectionLabel>En attente de confirmation client</SectionLabel>
+          <p className="mb-3 text-[12.5px] text-text-faint">« Transmise » : le client n&rsquo;a pas encore accusé réception. « Réception accusée » : il l&rsquo;a reçue mais ne l&rsquo;a pas encore confirmée. Rien n&rsquo;est considéré comme confirmé sans son retour enregistré.</p>
+          <DocumentList documents={waiting} empty="" showKind={false} />
+        </section>
+      )}
+      <DocumentList documents={orders} empty="Aucune commande client." showKind={false} />
+      <section>
+        <SectionLabel>Livraisons, factures et avoirs clients</SectionLabel>
+        <DocumentList documents={await listDocuments({ kind: ["customer_delivery", "customer_invoice", "customer_credit_note"] })} empty="Aucune livraison, facture ni avoir." />
+      </section>
+    </div>
   );
 }
 

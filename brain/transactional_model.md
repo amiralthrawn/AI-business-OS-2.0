@@ -10,14 +10,16 @@ Lifecycle, prefixes and derivations live in `app/transactions/lifecycle.py`
 |---|---|---|
 | customer_request | DEM | new → qualifying → quoting → negotiating → won / lost |
 | customer_quote | DEV | draft → sent → accepted / rejected / expired |
-| customer_order | CMD | draft → confirmed → delivered → invoiced → closed (or cancelled) |
+| customer_order | CMD | draft → (sent → acknowledged →) confirmed → delivered → invoiced → closed (or cancelled) |
 | customer_delivery | LIV | planned → shipped → delivered |
-| customer_invoice | FAC | draft → issued → paid |
+| customer_invoice | FAC | draft → issued → partially_paid → paid (settlement statuses set by payments, V2.2) |
 | purchase_request | DA | draft → consulting → comparing → decided → ordered |
 | supplier_quote | DFO | requested → received → selected / declined |
 | purchase_order | BC | draft → sent → confirmed → received → closed |
 | reception | REC | expected → received |
-| supplier_invoice | FFO | received → approved → paid (disputed) |
+| supplier_invoice | FFO | received → approved → partially_paid → paid (disputed); paid set by payments |
+| customer_credit_note | AV | draft → submitted → accepted / rejected → validated (HITL) → applied → refunded |
+| supplier_credit_note | AVF | requested → confirmed / rejected → applied |
 
 Numbers: `PREFIX-YYYY-NNNN`, per company/kind/year. `external_reference` keeps
 the other party's number; `issued_at`, `due_at` (promise), `completed_at`
@@ -28,6 +30,11 @@ the other party's number; `issued_at`, `due_at` (promise), `completed_at`
 (quote → order, supplier quote → PO). Obvious status consequences are applied
 only when they are valid transitions (quote accepted → request won; PO created →
 purchase request walks consulting → comparing → decided → ordered).
+
+V2.2 (`brain/billing.md`): payments, instalments, balances, credit notes and
+delivery follow-up are derived from invoices, `CashMovement`s and
+`credit_applications`; statuses that follow a recorded fact are in
+`SYSTEM_STATUSES` and cannot be set through the status API.
 
 ## Ledger posting (V2 → V1 intelligence)
 

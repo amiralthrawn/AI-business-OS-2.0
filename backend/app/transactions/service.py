@@ -30,7 +30,7 @@ from app.core.events.business_event import BusinessEvent
 from app.objects.graph import document_chain, document_parents
 from app.objects.links import create_link
 from app.transactions import posting
-from app.transactions.lifecycle import DERIVATIONS, KINDS, allowed_transitions
+from app.transactions.lifecycle import DERIVATIONS, KINDS, SYSTEM_STATUSES, allowed_transitions
 from app.transactions.margin import estimate_planned_unit_cost
 
 DOCUMENT_CREATED = "DocumentCreated"
@@ -323,16 +323,27 @@ def derive_document(
         # a supplier quote's prices become the PO's -- declared by the same party.
         (source.kind in SALES_KINDS and target_kind in SALES_KINDS)
         or (source.kind in {DocumentKind.SUPPLIER_QUOTE, DocumentKind.PURCHASE_ORDER} and target_kind in PROCUREMENT_KINDS)
+        # A supplier claim is priced as the goods were bought/invoiced.
+        or (target_kind == DocumentKind.SUPPLIER_CREDIT_NOTE)
     )
 
+    # A credit note drawn from a delivery/reception with recorded
+    # non-conformities credits only the non-conforming quantities.
+    source_lines = list(source.lines)
+    nonconforming_only = target_kind in {DocumentKind.CUSTOMER_CREDIT_NOTE, DocumentKind.SUPPLIER_CREDIT_NOTE} and any(
+        (ln.quantity_nonconforming or 0) > 0 for ln in source_lines
+    )
+    if nonconforming_only:
+        source_lines = [ln for ln in source_lines if (ln.quantity_nonconforming or 0) > 0]
+
     lines: list[LineInput] = []
-    for line in source.lines:
+    for line in source_lines:
         keep_price = copy_prices_from_source and line.unit_price is not None
         lines.append(
             LineInput(
                 product_id=line.product_id,
-                description=line.description,
-                quantity=line.quantity,
+                description=(f"Non-conformité : {line.nonconformity_note}" if nonconforming_only and line.nonconformity_note else line.description),
+                quantity=line.quantity_nonconforming if nonconforming_only else line.quantity,
                 unit_price=line.unit_price if keep_price else None,
                 # A supplier invoice copied from its PO is only DECLARED until
                 # a human approves it against the real invoice (then OBSERVED).
@@ -425,7 +436,7 @@ def _advance_after_derivation(session: Session, event_bus: EventBus, source: Com
 # --- Edit ----------------------------------------------------------------------
 
 
-EDITABLE_FIELDS = {"title", "external_reference", "internal_reference", "due_at", "follow_up_at", "payment_terms", "notes", "contact_id"}
+EDITABLE_FIELDS = {"title", "external_reference", "internal_reference", "due_at", "follow_up_at", "payment_terms", "notes", "contact_id", "carrier", "tracking_number"}
 
 
 def update_document(session: Session, doc: CommercialDocument, changes: dict) -> CommercialDocument:
@@ -508,11 +519,13 @@ def add_cost_item(
 # confirmed by the other party, or already posted to the ledger).
 _LOCKED_STATUSES: dict[DocumentKind, frozenset[str]] = {
     DocumentKind.CUSTOMER_QUOTE: frozenset({"sent"}),
-    DocumentKind.CUSTOMER_ORDER: frozenset({"confirmed", "delivered", "invoiced"}),
+    DocumentKind.CUSTOMER_ORDER: frozenset({"sent", "acknowledged", "confirmed", "delivered", "invoiced"}),
     DocumentKind.CUSTOMER_DELIVERY: frozenset({"shipped"}),
-    DocumentKind.CUSTOMER_INVOICE: frozenset({"issued"}),
+    DocumentKind.CUSTOMER_INVOICE: frozenset({"issued", "partially_paid"}),
     DocumentKind.PURCHASE_ORDER: frozenset({"sent", "confirmed", "received"}),
-    DocumentKind.SUPPLIER_INVOICE: frozenset({"approved"}),
+    DocumentKind.SUPPLIER_INVOICE: frozenset({"approved", "partially_paid"}),
+    DocumentKind.CUSTOMER_CREDIT_NOTE: frozenset({"submitted", "accepted", "validated", "applied"}),
+    DocumentKind.SUPPLIER_CREDIT_NOTE: frozenset({"confirmed"}),
 }
 
 
@@ -528,9 +541,17 @@ def _ensure_editable(doc: CommercialDocument) -> None:
 # --- Lifecycle -----------------------------------------------------------------
 
 
-def change_status(session: Session, event_bus: EventBus, doc: CommercialDocument, new_status: str, *, occurred_at: datetime | None = None) -> CommercialDocument:
+def change_status(
+    session: Session, event_bus: EventBus, doc: CommercialDocument, new_status: str, *, occurred_at: datetime | None = None, system: bool = False
+) -> CommercialDocument:
+    """`system=True` only from app.billing / the HITL executor: statuses in
+    SYSTEM_STATUSES follow a recorded fact (payment, approval, imputation)
+    and are never set by a plain status change."""
+
     if new_status not in allowed_transitions(doc.kind, doc.status):
         raise DocumentError(f"Transition impossible : {doc.status} → {new_status}")
+    if not system and new_status in SYSTEM_STATUSES.get(doc.kind, frozenset()):
+        raise DocumentError("Ce statut découle d'un fait enregistré (paiement, validation ou imputation) : utilisez l'action correspondante")
     old_status = doc.status
     doc.status = new_status
     now = occurred_at or _now()
@@ -556,6 +577,9 @@ def change_status(session: Session, event_bus: EventBus, doc: CommercialDocument
     session.refresh(doc)
     posting.on_status_changed(session, event_bus, doc, old_status)
     _publish(event_bus, DOCUMENT_STATUS_CHANGED, doc, {"from": old_status, "to": new_status, "number": doc.number})
+    from app.billing.service import on_document_status_changed
+
+    on_document_status_changed(session, event_bus, doc, old_status)
     return doc
 
 

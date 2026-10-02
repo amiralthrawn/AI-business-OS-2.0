@@ -427,6 +427,10 @@ def run() -> None:
         from data.seed_v21 import seed_v21_demo
 
         print("V2.1 demo data:", seed_v21_demo(session, bus))
+        # V2.2: payments, instalments, deliveries, credit notes (idempotent, data/seed_v22.py).
+        from data.seed_v22 import seed_v22_demo
+
+        print("V2.2 demo data:", seed_v22_demo(session, bus))
     finally:
         session.close()
 

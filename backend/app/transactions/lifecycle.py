@@ -75,14 +75,22 @@ KINDS: dict[DocumentKind, KindSpec] = {
         domain="sales",
         party="customer",
         initial_status="draft",
+        # draft -> confirmed stays possible (an order received firm, e.g. the
+        # customer's own PO). "sent"/"acknowledged" record, when it happens,
+        # that the order was transmitted and that the CUSTOMER acknowledged
+        # receipt -- each set by a person recording that event, never inferred.
         transitions={
-            "draft": ("confirmed", "cancelled"),
+            "draft": ("sent", "confirmed", "cancelled"),
+            "sent": ("acknowledged", "confirmed", "cancelled"),
+            "acknowledged": ("confirmed", "cancelled"),
             "confirmed": ("delivered", "cancelled"),
             "delivered": ("invoiced",),
             "invoiced": ("closed",),
         },
         status_labels={
             "draft": "Brouillon",
+            "sent": "Transmise au client",
+            "acknowledged": "Réception accusée par le client",
             "confirmed": "Confirmée",
             "delivered": "Livrée",
             "invoiced": "Facturée",
@@ -107,8 +115,8 @@ KINDS: dict[DocumentKind, KindSpec] = {
         domain="sales",
         party="customer",
         initial_status="draft",
-        transitions={"draft": ("issued", "cancelled"), "issued": ("paid",)},
-        status_labels={"draft": "Brouillon", "issued": "Émise", "paid": "Payée", "cancelled": "Annulée"},
+        transitions={"draft": ("issued", "cancelled"), "issued": ("partially_paid", "paid"), "partially_paid": ("paid",)},
+        status_labels={"draft": "Brouillon", "issued": "Émise", "partially_paid": "Partiellement réglée", "paid": "Réglée", "cancelled": "Annulée"},
         terminal=frozenset({"paid", "cancelled"}),
     ),
     K.PURCHASE_REQUEST: KindSpec(
@@ -189,10 +197,77 @@ KINDS: dict[DocumentKind, KindSpec] = {
         domain="procurement",
         party="supplier",
         initial_status="received",
-        transitions={"received": ("approved", "disputed"), "disputed": ("approved",), "approved": ("paid",)},
-        status_labels={"received": "Reçue", "approved": "Validée", "disputed": "Contestée", "paid": "Payée"},
+        transitions={"received": ("approved", "disputed"), "disputed": ("approved",), "approved": ("partially_paid", "paid"), "partially_paid": ("paid",)},
+        status_labels={"received": "Reçue", "approved": "Validée", "disputed": "Contestée", "partially_paid": "Partiellement réglée", "paid": "Réglée"},
         terminal=frozenset({"paid"}),
     ),
+    K.CUSTOMER_CREDIT_NOTE: KindSpec(
+        prefix="AV",
+        label="Avoir client",
+        domain="sales",
+        party="customer",
+        initial_status="draft",
+        # Offered to the customer, answered by the customer (recorded by a
+        # person), validated internally (HITL), then imputed once
+        # (app.billing). Creating a credit note never means it is accepted.
+        transitions={
+            "draft": ("submitted", "cancelled"),
+            "submitted": ("accepted", "rejected", "draft"),  # -> draft: the customer asked for a change
+            "accepted": ("validated",),
+            "validated": ("applied",),
+            "applied": ("refunded",),
+        },
+        status_labels={
+            "draft": "Préparé",
+            "submitted": "Soumis au client — en attente de réponse",
+            "accepted": "Accepté par le client",
+            "rejected": "Refusé par le client",
+            "validated": "Validé comptablement",
+            "applied": "Imputé au compte client",
+            "refunded": "Remboursé",
+            "cancelled": "Annulé",
+        },
+        terminal=frozenset({"rejected", "refunded", "cancelled"}),
+    ),
+    K.SUPPLIER_CREDIT_NOTE: KindSpec(
+        prefix="AVF",
+        label="Avoir fournisseur",
+        domain="procurement",
+        party="supplier",
+        initial_status="requested",
+        # Our claim to a supplier (non-conformity, price error): requested,
+        # then confirmed or refused BY THE SUPPLIER (recorded by a person),
+        # then imputed once on what we owe them.
+        transitions={
+            "requested": ("confirmed", "rejected", "cancelled"),
+            "confirmed": ("applied",),
+        },
+        status_labels={
+            "requested": "Réclamation envoyée — avoir demandé",
+            "confirmed": "Avoir confirmé par le fournisseur",
+            "rejected": "Refusé par le fournisseur",
+            "applied": "Imputé",
+            "cancelled": "Annulé",
+        },
+        terminal=frozenset({"rejected", "applied", "cancelled"}),
+    ),
+}
+
+# Statuses only the system may set, because they follow a recorded fact:
+# payments (invoice settlement), a human approval in the HITL flow
+# (validation) or the imputation/refund bookkeeping of app.billing. They are
+# never offered as a plain "change status" button.
+SYSTEM_STATUSES: dict[DocumentKind, frozenset[str]] = {
+    K.CUSTOMER_INVOICE: frozenset({"partially_paid", "paid"}),
+    K.SUPPLIER_INVOICE: frozenset({"partially_paid", "paid"}),
+    K.CUSTOMER_CREDIT_NOTE: frozenset({"validated", "applied", "refunded"}),
+    K.SUPPLIER_CREDIT_NOTE: frozenset({"applied"}),
+}
+
+# Invoice statuses that carry a receivable/payable.
+OPEN_INVOICE_STATUSES = {
+    K.CUSTOMER_INVOICE: frozenset({"issued", "partially_paid", "paid"}),
+    K.SUPPLIER_INVOICE: frozenset({"received", "approved", "disputed", "partially_paid", "paid"}),
 }
 
 # source kind -> kinds that can be created from it. Deriving copies parties
@@ -200,10 +275,14 @@ KINDS: dict[DocumentKind, KindSpec] = {
 DERIVATIONS: dict[DocumentKind, tuple[DocumentKind, ...]] = {
     K.CUSTOMER_REQUEST: (K.CUSTOMER_QUOTE, K.PURCHASE_REQUEST),
     K.CUSTOMER_QUOTE: (K.CUSTOMER_ORDER,),
-    K.CUSTOMER_ORDER: (K.CUSTOMER_DELIVERY, K.CUSTOMER_INVOICE, K.PURCHASE_REQUEST),
+    K.CUSTOMER_ORDER: (K.CUSTOMER_DELIVERY, K.CUSTOMER_INVOICE, K.PURCHASE_REQUEST, K.CUSTOMER_CREDIT_NOTE),
+    K.CUSTOMER_DELIVERY: (K.CUSTOMER_CREDIT_NOTE,),
+    K.CUSTOMER_INVOICE: (K.CUSTOMER_CREDIT_NOTE,),
     K.PURCHASE_REQUEST: (K.SUPPLIER_QUOTE, K.PURCHASE_ORDER),
     K.SUPPLIER_QUOTE: (K.PURCHASE_ORDER,),
-    K.PURCHASE_ORDER: (K.RECEPTION, K.SUPPLIER_INVOICE),
+    K.PURCHASE_ORDER: (K.RECEPTION, K.SUPPLIER_INVOICE, K.SUPPLIER_CREDIT_NOTE),
+    K.RECEPTION: (K.SUPPLIER_CREDIT_NOTE,),
+    K.SUPPLIER_INVOICE: (K.SUPPLIER_CREDIT_NOTE,),
 }
 
 # Which write permission edits a kind (app.access.policy). Physical flow
@@ -220,6 +299,10 @@ KIND_WRITE_PERMISSION: dict[DocumentKind, str] = {
     K.PURCHASE_ORDER: "write:procurement",
     K.RECEPTION: "write:operations",
     K.SUPPLIER_INVOICE: "write:finance",
+    # Offering a credit note / claiming one is commercial work; imputing it
+    # and refunding are Finance's (app.billing checks write:finance).
+    K.CUSTOMER_CREDIT_NOTE: "write:sales",
+    K.SUPPLIER_CREDIT_NOTE: "write:procurement",
 }
 
 PREFIX_TO_KIND: dict[str, DocumentKind] = {spec.prefix: kind for kind, spec in KINDS.items()}
@@ -231,6 +314,14 @@ def spec(kind: DocumentKind) -> KindSpec:
 
 def allowed_transitions(kind: DocumentKind, status: str) -> tuple[str, ...]:
     return KINDS[kind].transitions.get(status, ())
+
+
+def manual_transitions(kind: DocumentKind, status: str) -> tuple[str, ...]:
+    """The transitions a person may trigger directly (status buttons, the
+    status API) -- all of them minus the system-only ones."""
+
+    blocked = SYSTEM_STATUSES.get(kind, frozenset())
+    return tuple(s for s in allowed_transitions(kind, status) if s not in blocked)
 
 
 def status_label(kind: DocumentKind, status: str) -> str:

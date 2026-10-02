@@ -16,6 +16,8 @@ class DocumentKind(str, enum.Enum):
 
     Sales flow:       CUSTOMER_REQUEST -> CUSTOMER_QUOTE -> CUSTOMER_ORDER -> CUSTOMER_DELIVERY / CUSTOMER_INVOICE
     Procurement flow: PURCHASE_REQUEST -> SUPPLIER_QUOTE -> PURCHASE_ORDER -> RECEPTION / SUPPLIER_INVOICE
+    Credit notes:     CUSTOMER_CREDIT_NOTE (from an order, delivery or invoice),
+                      SUPPLIER_CREDIT_NOTE (a claim, from a PO, reception or supplier invoice)
 
     A CUSTOMER_REQUEST is the root of an "affaire" (a deal): both the quotes
     sent to the customer and the purchase requests it triggers derive from it."""
@@ -30,6 +32,8 @@ class DocumentKind(str, enum.Enum):
     PURCHASE_ORDER = "purchase_order"
     RECEPTION = "reception"
     SUPPLIER_INVOICE = "supplier_invoice"
+    CUSTOMER_CREDIT_NOTE = "customer_credit_note"
+    SUPPLIER_CREDIT_NOTE = "supplier_credit_note"
 
 
 SALES_KINDS = frozenset(
@@ -39,6 +43,7 @@ SALES_KINDS = frozenset(
         DocumentKind.CUSTOMER_ORDER,
         DocumentKind.CUSTOMER_DELIVERY,
         DocumentKind.CUSTOMER_INVOICE,
+        DocumentKind.CUSTOMER_CREDIT_NOTE,
     }
 )
 PROCUREMENT_KINDS = frozenset(
@@ -48,6 +53,7 @@ PROCUREMENT_KINDS = frozenset(
         DocumentKind.PURCHASE_ORDER,
         DocumentKind.RECEPTION,
         DocumentKind.SUPPLIER_INVOICE,
+        DocumentKind.SUPPLIER_CREDIT_NOTE,
     }
 )
 
@@ -87,6 +93,10 @@ class CommercialDocument(Base, IdMixin, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     payment_terms: Mapped[str | None] = mapped_column(String(120))
+    # Deliveries / receptions: who carries the goods and their tracking
+    # number, when known (declared by the carrier or the other party).
+    carrier: Mapped[str | None] = mapped_column(String(120))
+    tracking_number: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)
     # "manual" | "import" | "email" | "ai" -- provenance of the document itself.
@@ -125,6 +135,10 @@ class CommercialDocumentLine(Base, IdMixin, TimestampMixin):
     planned_unit_cost: Mapped[float | None] = mapped_column(Float)
     planned_cost_basis: Mapped[ValueBasis | None] = mapped_column(Enum(ValueBasis), nullable=True)
     planned_cost_source: Mapped[str | None] = mapped_column(String(120))
+    # Deliveries / receptions only: part of `quantity` found non-conforming
+    # on inspection, and what was wrong. Recorded by a person (never inferred).
+    quantity_nonconforming: Mapped[float | None] = mapped_column(Float)
+    nonconformity_note: Mapped[str | None] = mapped_column(String(255))
 
     document: Mapped[CommercialDocument] = relationship(back_populates="lines")
     product: Mapped["Product | None"] = relationship()
@@ -164,3 +178,41 @@ class CostItem(Base, IdMixin, TimestampMixin):
     reference: Mapped[str | None] = mapped_column(String(120))
 
     document: Mapped[CommercialDocument] = relationship(back_populates="cost_items")
+
+
+class PaymentInstallment(Base, IdMixin, TimestampMixin):
+    """One due date of an invoice's payment schedule (an instalment, a
+    deposit, the balance...). Terms are free per invoice -- no rule assumes a
+    number of instalments. An invoice without rows is due in one payment at
+    its `due_at`. The amounts of one invoice's rows add up to its total
+    (checked by app.billing when the schedule is set)."""
+
+    __tablename__ = "payment_installments"
+
+    company_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("companies.id"), nullable=False, index=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("commercial_documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    label: Mapped[str | None] = mapped_column(String(120))
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class CreditApplication(Base, IdMixin, TimestampMixin):
+    """How a validated credit note was imputed -- written ONCE (unique per
+    credit note), so a credit note can never be deducted twice.
+    `applied_amount` reduced the invoice's receivable/payable;
+    `refund_amount` exceeded what was still owed and must be paid back
+    (recorded later as a real CashMovement)."""
+
+    __tablename__ = "credit_applications"
+
+    company_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("companies.id"), nullable=False, index=True)
+    credit_note_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("commercial_documents.id"), nullable=False, unique=True, index=True
+    )
+    invoice_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("commercial_documents.id"), nullable=True, index=True)
+    applied_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    refund_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

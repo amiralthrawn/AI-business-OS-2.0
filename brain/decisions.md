@@ -727,3 +727,41 @@ configurée and "Connectée" requires a real provider. No account is connected.
 Draft ≠ validated ≠ sent ≠ reply ≠ order; rates need 3 sends. Campaign
 figures are declared / observed / not available; no attribution without a
 real link; no marketing data is created or modified.
+
+## 50. Payments are money movements; settlement is derived (V2.2)
+
+A payment is an actual `CashMovement` allocated to an invoice; invoice
+"partiellement réglée / réglée", balances, overdue amounts and instalment
+progress are computed from them (one function feeds customer page, order,
+Finance, Centre de contrôle). No manual "paid" status (`SYSTEM_STATUSES`).
+Rejected: a payments table parallel to the treasury (two truths).
+
+## 51. Instalments are free per invoice
+
+`payment_installments` rows, any number, any amounts, summing to the
+invoice total; none = one payment at the due date. No global payment rule.
+
+## 52. A credit note moves a balance only once imputed, and only once
+
+Created ≠ proposed ≠ accepted ≠ validated ≠ imputed. Customer acceptance
+creates a HITL validation Task (finance domain); imputation writes one unique
+`credit_applications` row splitting "reduces the invoice" / "to refund".
+Refused or pending credit notes never change a balance.
+
+## 53. Credit notes and claims are commercial documents
+
+`customer_credit_note` (AV) and `supplier_credit_note` (AVF) join the same
+table, lifecycle, graph and contextual actions instead of a new module; drawn
+from a delivery/reception, they take only the non-conforming quantities.
+
+## 54. The other party's actions are recorded, never inferred
+
+Order acknowledgement, credit-note acceptance/refusal, supplier confirmation:
+status buttons say "Enregistrer …"; an approved email marks an order
+"transmise", never "reçue". No external notification is claimed.
+
+## 55. Accounting stays references, not a ledger
+
+411/401/512/601/706 are examples until the accountant confirms them
+(`finance_settings.accounting_refs`); open questions are listed in
+`brain/billing.md`. No journal, no VAT, no FEC.

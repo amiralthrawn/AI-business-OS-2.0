@@ -57,6 +57,9 @@ class FinanceSettingsIn(BaseModel):
     declared_valuation_date: str | None = None
     revenue_multiple_min: float | None = None
     revenue_multiple_max: float | None = None
+    # V2.2: account references to confirm with the accountant, e.g.
+    # {"customer_receivable": "411", "bank": "512", "purchases": "601"}.
+    accounting_refs: dict[str, str] | None = None
 
 
 @treasury_router.get("/overview")

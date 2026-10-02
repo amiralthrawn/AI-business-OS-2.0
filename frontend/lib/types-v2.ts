@@ -109,7 +109,9 @@ export type DocumentKind =
   | "supplier_quote"
   | "purchase_order"
   | "reception"
-  | "supplier_invoice";
+  | "supplier_invoice"
+  | "customer_credit_note"
+  | "supplier_credit_note";
 
 export interface DocumentParty {
   type: "customer" | "supplier";
@@ -161,6 +163,8 @@ export interface DocumentLine {
   planned_unit_cost: number | null;
   planned_cost_basis: ValueBasis | null;
   planned_cost_source: string | null;
+  quantity_nonconforming?: number | null;
+  nonconformity_note?: string | null;
 }
 
 export interface CostItemRead {
@@ -290,6 +294,13 @@ export interface DocumentDetail extends DocumentSummary {
   chain: DocumentSummary[];
   margin?: DocumentMargin;
   benchmarks?: Benchmark[];
+  carrier?: string | null;
+  tracking_number?: string | null;
+  // V2.2 billing views (backend app/billing, brain/billing.md)
+  settlement?: Settlement;
+  fulfilment?: Fulfilment | null;
+  payment?: OrderPayment;
+  credit?: CreditView;
 }
 
 export interface KindMeta {
@@ -531,5 +542,169 @@ export interface CampaignPerformance {
   campaigns: CampaignView[];
   agency_proposals: CommunicationRow[];
   channels_connected: string[];
+  method: string;
+}
+
+
+// ---------------------------------------------------------------------------
+// V2.2 -- payments, instalments, accounts, credit notes, deliveries
+// (backend app/billing/service.py). Every amount is derived from recorded
+// invoices, payments and imputed credit notes.
+// ---------------------------------------------------------------------------
+
+export type InstallmentState = "paid" | "partial" | "due" | "overdue";
+
+export interface Installment {
+  id: string | null;
+  sequence: number;
+  label: string | null;
+  due_at: string | null;
+  amount: number;
+  stored: boolean;
+  settled: number;
+  remaining: number;
+  state: InstallmentState;
+  days_late: number;
+}
+
+export interface Settlement {
+  invoice_id: string;
+  number: string;
+  status: string;
+  status_label: string;
+  available: boolean;
+  reason?: string;
+  total?: number;
+  paid?: number;
+  credited?: number;
+  remaining?: number;
+  state?: "paid" | "partially_paid" | "unpaid";
+  state_label?: string;
+  is_late?: boolean;
+  overdue_amount?: number;
+  installments?: Installment[];
+  installments_paid?: number;
+  installments_count?: number;
+  schedule_is_default?: boolean;
+  next_due?: Installment | null;
+  payments?: { id: string; amount: number; occurred_at: string; label: string | null; source: string; simulated: boolean }[];
+  credits?: { credit_note_id: string; number: string | null; amount: number; applied_at: string }[];
+}
+
+export interface OrderPayment {
+  order_total: number | null;
+  invoiced: number;
+  paid?: number;
+  credited?: number;
+  remaining?: number;
+  installments_paid?: number;
+  installments_count?: number;
+  next_due?: Installment | null;
+  is_late?: boolean;
+  overdue_amount?: number;
+  state: "paid" | "partially_paid" | "unpaid" | "not_invoiced";
+  state_label: string;
+  invoices: { id: string; number: string; status_label: string; remaining?: number }[];
+}
+
+export interface FulfilmentLine {
+  key: string;
+  product_id: string | null;
+  label: string;
+  unit: string | null;
+  ordered: number;
+  shipped: number;
+  done: number;
+  nonconforming: number;
+  remaining: number;
+  in_transit: number;
+}
+
+export interface Fulfilment {
+  order_id: string;
+  kind: "delivery" | "reception";
+  state: "not_started" | "planned" | "in_transit" | "partial" | "complete";
+  state_label: string;
+  is_late: boolean;
+  promised_at: string | null;
+  progress: number;
+  lines: FulfilmentLine[];
+  documents: { id: string; number: string; status: string; status_label: string; planned_at: string | null; done_at: string | null; late_days: number; carrier: string | null; tracking_number: string | null; nonconforming_lines: number }[];
+  nonconforming_total: number;
+}
+
+export interface CreditView {
+  credit_note_id: string;
+  amount: number | null;
+  status: string;
+  status_label: string;
+  effect: string;
+  counts_in_balance: boolean;
+  invoice: { id: string; number: string; status_label: string } | null;
+  application: { applied_amount: number; refund_amount: number; applied_at: string; invoice_id: string | null } | null;
+  refund: { id: string; amount: number; occurred_at: string } | null;
+  refund_due: number;
+  validation_task_id: string | null;
+  can_request_validation: boolean;
+  can_apply: boolean;
+  can_refund: boolean;
+}
+
+export interface AccountStatementEntry {
+  date: string;
+  kind: "invoice" | "payment" | "unallocated_payment" | "credit_note" | "refund";
+  label: string;
+  amount: number;
+  balance: number;
+  document_id: string | null;
+  document_number: string | null;
+  account_ref: string | null;
+  simulated: boolean;
+  note: string | null;
+}
+
+export interface PartyAccount {
+  party_type: "customer" | "supplier";
+  party_id: string;
+  invoiced: number;
+  paid: number;
+  credited: number;
+  outstanding: number;
+  overdue: number;
+  unallocated: number;
+  credit_on_account: number;
+  refund_due: number;
+  balance: number;
+  is_up_to_date: boolean;
+  next_due: (Installment & { invoice_number: string; invoice_id: string }) | null;
+  open_invoices: { id: string; number: string; total: number; remaining: number; state_label: string; is_late: boolean; installments_paid: number; installments_count: number; next_due: Installment | null }[];
+  unallocated_payments: { id: string; amount: number; occurred_at: string; label: string | null; simulated: boolean }[];
+  pending_credit_notes: { id: string; number: string; amount: number; status: string; status_label: string }[];
+  statement: AccountStatementEntry[];
+  has_simulated: boolean;
+  method: string;
+}
+
+export interface AccountingRefs {
+  configured: Record<string, string>;
+  examples: Record<string, { account: string; label: string }>;
+  status: "configured" | "to_confirm";
+  note: string;
+}
+
+export interface BillingOverview {
+  receivables: {
+    outstanding: number;
+    overdue: number;
+    overdue_invoices: { id: string; number: string; party: string | null; overdue: number; remaining: number }[];
+    upcoming: { invoice_id: string; invoice_number: string; party: string | null; due_at: string; amount: number; label: string | null; state: InstallmentState; days_late: number }[];
+  };
+  payables: { outstanding: number; overdue: number; open_invoices: { id: string; number: string; party: string | null; remaining: number; is_late: boolean; status_label: string }[] };
+  unallocated_payments: { id: string; amount: number; occurred_at: string; label: string | null; direction: "in" | "out"; counterparty: string | null; customer_id: string | null; supplier_id: string | null; simulated: boolean }[];
+  credit_notes: { id: string; number: string; kind: DocumentKind; party: string | null; amount: number | null; status: string; status_label: string; needs_action: boolean; refund_due: number; validation_task_id: string | null }[];
+  refunds_due: number;
+  orders_awaiting_confirmation: { id: string; number: string; party: string | null; status: string; status_label: string; total: number | null; since: string }[];
+  deliveries_to_watch: { order_id: string; number: string; party: string | null; kind: "delivery" | "reception"; state: string; state_label: string; is_late: boolean; progress: number; nonconforming: number }[];
+  accounting_refs: AccountingRefs;
   method: string;
 }

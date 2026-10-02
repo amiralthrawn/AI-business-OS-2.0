@@ -32,6 +32,7 @@ from app.people.router import router as people_router
 from app.sourcing.router import router as sourcing_router
 from app.treasury.router import ownership_router, treasury_router
 from app.website.router import router as website_router
+from app.billing.router import router as billing_router
 
 app = FastAPI(title="AI Business OS", version="0.1.0")
 
@@ -44,11 +45,19 @@ app = FastAPI(title="AI Business OS", version="0.1.0")
 # origin(s) (e.g. the Vercel frontend URL) -- never both at once, so a
 # deployed backend never also trusts "http://localhost:*". No credentials
 # either way; no authentication is added by this.
+#
+# Local dev also accepts Cloudflare Quick Tunnel frontends
+# (https://<random>.trycloudflare.com, demo.ps1): their subdomain changes on
+# every tunnel restart, so an exact origin cannot be pinned in advance. This
+# is dev-only -- a deployment sets ALLOWED_ORIGINS and never matches it.
+# Starlette full-matches the regex, so "x.trycloudflare.com.evil.com" fails.
+DEV_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1):\d+|https://[a-z0-9-]+\.trycloudflare\.com"
+
 _allowed_origins = get_settings().cors_allowed_origins()
 if _allowed_origins is None:
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+        allow_origin_regex=DEV_ORIGIN_REGEX,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -94,6 +103,7 @@ app.include_router(ownership_router)
 app.include_router(compliance_router)
 app.include_router(sourcing_router)
 app.include_router(website_router)
+app.include_router(billing_router)
 
 
 @app.get("/health")

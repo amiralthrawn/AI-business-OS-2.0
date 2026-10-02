@@ -6,7 +6,8 @@ import PriorityCard from "@/components/intelligence/PriorityCard";
 import Card from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import { TRANSACTION_STATUS_LABEL, TRANSACTION_TYPE_LABEL, formatEUR } from "@/lib/labels";
-import { getSupplier, getObjectContext, listDocuments } from "@/lib/api";
+import { getObjectContext, getSupplier, getSupplierAccount, listDocuments } from "@/lib/api";
+import AccountPanel from "@/components/billing/AccountPanel";
 import DocumentList from "@/components/objects/DocumentList";
 import ObjectActions from "@/components/objects/ObjectActions";
 import ObjectBreadcrumb from "@/components/objects/ObjectBreadcrumb";
@@ -26,7 +27,7 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
     notFound();
   }
   // V2: the object's relations, actions and documents (brain/navigation_v2.md).
-  const [context, documents] = await Promise.all([getObjectContext("supplier", id), listDocuments({ supplier_id: id })]);
+  const [context, documents, account] = await Promise.all([getObjectContext("supplier", id), listDocuments({ supplier_id: id }), getSupplierAccount(id).catch(() => null)]);
 
   return (
     <main className="space-y-8 p-8 md:p-12">
@@ -41,6 +42,8 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
       </div>
 
       <ObjectActions objectType="supplier" objectId={supplier.id} actions={context.actions} />
+
+      {account && account.statement.length > 0 && <AccountPanel account={account} />}
 
       <section>
         <SectionLabel>Affaires et documents</SectionLabel>

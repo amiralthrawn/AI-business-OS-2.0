@@ -159,7 +159,7 @@ def _collect_line_sources(session: Session, chain: list[CommercialDocument], pro
                     sources[stage] = CostSource(stage, line.unit_price, basis, confidence, STAGE_LABELS[stage], doc.id, doc.number)
                     return
 
-    invoices = [d for d in chain if d.kind == K.SUPPLIER_INVOICE and d.status in {"approved", "paid"}]
+    invoices = [d for d in chain if d.kind == K.SUPPLIER_INVOICE and d.status in {"approved", "partially_paid", "paid"}]
     doc_source("actual", invoices)
     # An invoice not yet approved is at best a declared figure, never "actual".
     if "actual" in sources and sources["actual"].basis != ValueBasis.OBSERVED.value:
@@ -328,7 +328,7 @@ def compute_document_margin(session: Session, doc: CommercialDocument) -> Docume
             variances.append(Variance(f"Coût annexe · {item.kind}", planned_mid, current_mid, round(delta, 2), explanation))
     variances.sort(key=lambda v: -abs(v.delta))
 
-    revenue_basis = "observed" if any(d.kind == K.CUSTOMER_INVOICE and d.status in {"issued", "paid"} for d in chain) else "declared"
+    revenue_basis = "observed" if any(d.kind == K.CUSTOMER_INVOICE and d.status in {"issued", "partially_paid", "paid"} for d in chain) else "declared"
     return DocumentMargin(
         doc.id, doc.number, doc.kind.value, doc.currency, revenue_basis, lines, cost_items,
         current_view, planned_view, variances, missing, allocation_note,

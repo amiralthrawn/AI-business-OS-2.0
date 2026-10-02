@@ -153,6 +153,11 @@ def _require_kind(user: CurrentUser, kind: DocumentKind) -> None:
 
 
 def _party(db: Session, doc: CommercialDocument) -> dict | None:
+    # A procurement document may also carry the deal's customer (traceability):
+    # its party is the supplier. Sales documents: the customer.
+    if KINDS[doc.kind].party == "supplier" and doc.supplier_id:
+        s = db.get(Supplier, doc.supplier_id)
+        return {"type": "supplier", "id": s.id, "name": s.name, "href": f"/data/suppliers/{s.id}"} if s else None
     if doc.customer_id:
         c = db.get(Customer, doc.customer_id)
         return {"type": "customer", "id": c.id, "name": c.name, "status": c.status, "href": f"/data/customers/{c.id}"} if c else None
@@ -200,6 +205,8 @@ def serialize_detail(db: Session, doc: CommercialDocument) -> dict:
         "payment_terms": doc.payment_terms,
         "notes": doc.notes,
         "source": doc.source,
+        "carrier": doc.carrier,
+        "tracking_number": doc.tracking_number,
         "editable": service.is_editable(doc),
         "contact": {"id": contact.id, "name": contact.name, "email": contact.email} if contact else None,
         "lines": [
@@ -214,6 +221,7 @@ def serialize_detail(db: Session, doc: CommercialDocument) -> dict:
                 "planned_unit_cost": ln.planned_unit_cost,
                 "planned_cost_basis": ln.planned_cost_basis.value if ln.planned_cost_basis else None,
                 "planned_cost_source": ln.planned_cost_source,
+                "quantity_nonconforming": ln.quantity_nonconforming, "nonconformity_note": ln.nonconformity_note,
             }
             for ln in doc.lines
         ],  # fmt: skip
@@ -229,6 +237,10 @@ def serialize_detail(db: Session, doc: CommercialDocument) -> dict:
     }
     if doc.kind in {DocumentKind.CUSTOMER_REQUEST, DocumentKind.CUSTOMER_QUOTE, DocumentKind.CUSTOMER_ORDER, DocumentKind.CUSTOMER_INVOICE}:
         data["margin"] = compute_document_margin(db, doc).to_dict()
+    # V2.2: settlement / fulfilment / credit position (app.billing).
+    from app.billing.router import service_view
+
+    data |= service_view(db, doc)
     if doc.kind == DocumentKind.PURCHASE_REQUEST:
         data["benchmarks"] = [
             benchmark_suppliers(db, ln.product_id, ln.quantity, purchase_request_id=doc.id).to_dict() for ln in doc.lines if ln.product_id

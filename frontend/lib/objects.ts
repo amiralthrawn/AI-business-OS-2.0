@@ -128,11 +128,13 @@ export const DOCUMENT_KIND_SHORT: Record<DocumentKind, string> = {
   purchase_order: "Commande fournisseur",
   reception: "Réception",
   supplier_invoice: "Facture fournisseur",
+  customer_credit_note: "Avoir",
+  supplier_credit_note: "Avoir fournisseur",
 };
 
 // Status tone: finished well / needs someone / finished badly / in progress.
-const GOOD = new Set(["won", "accepted", "confirmed", "delivered", "invoiced", "closed", "paid", "selected", "ordered", "received", "approved", "decided"]);
-const WAITING = new Set(["sent", "requested", "consulting", "comparing", "quoting", "negotiating", "qualifying", "shipped", "expected", "pending_validation"]);
+const GOOD = new Set(["won", "accepted", "confirmed", "delivered", "invoiced", "closed", "paid", "selected", "ordered", "received", "approved", "decided", "validated", "applied", "refunded"]);
+const WAITING = new Set(["sent", "requested", "consulting", "comparing", "quoting", "negotiating", "qualifying", "shipped", "expected", "pending_validation", "acknowledged", "submitted", "partially_paid", "issued"]);
 const BAD = new Set(["lost", "rejected", "expired", "cancelled", "declined", "disputed"]);
 
 export function statusTone(status: string): BadgeTone {

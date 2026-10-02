@@ -250,7 +250,16 @@ PURPOSE_LABELS = {
     # V2.1
     "interview_invite": "Proposition d'entretien",
     "expert_request": "Demande d'intervention",
+    # V2.2 (brain/billing.md)
+    "credit_note_offer": "Proposition d'avoir",
+    "supplier_claim": "Réclamation fournisseur",
+    "payment_reminder": "Relance de paiement",
 }
+
+
+def _doc_total(doc: CommercialDocument) -> float | None:
+    priced = [ln.quantity * ln.unit_price for ln in doc.lines if ln.unit_price is not None]
+    return round(sum(priced), 2) if priced else None
 
 
 def _lines_text(doc: CommercialDocument, with_prices: bool) -> str:
@@ -300,6 +309,27 @@ def _template(purpose: str, *, company: str, recipient: str, doc: CommercialDocu
         )
     if purpose == "send_purchase_order" and doc is not None:
         return f"Bon de commande{subject_ref}", f"{greet}\n\nVeuillez trouver notre commande{ref} :\n\n{_lines_text(doc, True)}\n\nMerci de nous confirmer la date d'expédition.{sign}"
+    if purpose == "credit_note_offer" and doc is not None:
+        total = _doc_total(doc)
+        amount = f"{total:,.2f} {doc.currency}".replace(",", " ") if total is not None else "[montant]"
+        return (
+            f"Proposition d'avoir{subject_ref}",
+            f"{greet}\n\nSuite à [décrire le problème constaté], nous vous proposons un avoir{ref} d'un montant de {amount} :\n\n"
+            f"{_lines_text(doc, True)}\n\nMerci de nous indiquer si vous acceptez cette proposition. "
+            f"Une fois votre accord reçu et l'avoir validé de notre côté, il sera imputé sur votre compte.{sign}",
+        )
+    if purpose == "supplier_claim" and doc is not None:
+        return (
+            f"Réclamation{subject_ref}",
+            f"{greet}\n\nNous avons constaté une non-conformité sur votre livraison{ref} :\n\n{_lines_text(doc, True)}\n\n"
+            f"[Décrire le défaut constaté]\n\nMerci de nous confirmer l'émission d'un avoir correspondant, ou de nous proposer une solution.{sign}",
+        )
+    if purpose == "payment_reminder" and doc is not None:
+        return (
+            f"Relance de paiement{subject_ref}",
+            f"{greet}\n\nSauf erreur de notre part, le règlement de notre facture{ref} reste en attente : [montant restant dû et échéance].\n\n"
+            f"Pourriez-vous nous indiquer la date de paiement prévue ? Si le règlement a déjà été effectué, merci de ne pas tenir compte de ce message.{sign}",
+        )
     if purpose == "interview_invite":
         return (
             f"Votre candidature — {company}",
@@ -547,6 +577,10 @@ def _apply_sent_effects(session: Session, event_bus: EventBus, draft: Communicat
     target_status = {
         "send_quote": "sent",
         "send_purchase_order": "sent",
+        # The order / credit-note offer really left (approved send): it is
+        # now "transmitted" -- never "acknowledged", which only the customer can do.
+        "order_confirmation": "sent",
+        "credit_note_offer": "submitted",
     }.get(draft.purpose or "")
     if target_status and target_status in allowed_transitions(doc.kind, doc.status):
         change_status(session, event_bus, doc, target_status)

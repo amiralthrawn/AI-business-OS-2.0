@@ -72,7 +72,15 @@ export default async function ProcurementPage({ searchParams }: { searchParams: 
           </section>
         </div>
       )}
-      {active === "invoices" && <DocumentList documents={await listDocuments({ kind: ["supplier_invoice"] })} empty="Aucune facture fournisseur." showKind={false} />}
+      {active === "invoices" && (
+        <div className="space-y-8">
+          <DocumentList documents={await listDocuments({ kind: ["supplier_invoice"] })} empty="Aucune facture fournisseur." showKind={false} />
+          <section>
+            <SectionLabel>Réclamations et avoirs fournisseurs</SectionLabel>
+            <DocumentList documents={await listDocuments({ kind: ["supplier_credit_note"] })} empty="Aucune réclamation en cours." showKind={false} />
+          </section>
+        </div>
+      )}
       {active === "followups" && followUps && <FollowUpList items={procurementFollowUps} note={followUps.note} canDraft={can(me?.permissions, "write:communications")} />}
       {active === "suppliers" && <Suppliers />}
     </main>

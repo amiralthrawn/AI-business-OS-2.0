@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from sqlalchemy.orm import Session
 
 from app.access.deps import CurrentUser
-from app.access.policy import ACTION_SUBMIT_EMAIL, WRITE_COMMUNICATIONS, WRITE_PROCUREMENT, WRITE_SALES
+from app.access.policy import WRITE_FINANCE, WRITE_OPERATIONS, ACTION_SUBMIT_EMAIL, WRITE_COMMUNICATIONS, WRITE_PROCUREMENT, WRITE_SALES
 from app.core.entities import (
     CommercialDocument,
     DocumentKind,
@@ -27,7 +27,7 @@ from app.core.entities import (
 )
 from app.objects.graph import document_ancestry, related_edges
 from app.objects.registry import OBJECT_TYPES, ObjectSummary, get_object, summarize
-from app.transactions.lifecycle import DERIVATIONS, KIND_WRITE_PERMISSION, KINDS, allowed_transitions, status_label
+from app.transactions.lifecycle import DERIVATIONS, KIND_WRITE_PERMISSION, KINDS, manual_transitions, status_label
 
 # Group order and labels of the "related objects" panel.
 GROUPS: list[tuple[str, str]] = [
@@ -190,6 +190,24 @@ _EMAIL_PURPOSES_BY_KIND: dict[DocumentKind, list[tuple[str, str]]] = {
     DocumentKind.PURCHASE_REQUEST: [("rfq_price", "Demander un prix"), ("rfq_availability", "Demander la disponibilité"), ("rfq_lead_time", "Demander un délai")],
     DocumentKind.SUPPLIER_QUOTE: [("rfq_terms", "Demander les conditions"), ("rfq_documents", "Demander des documents"), ("follow_up", "Relancer le fournisseur")],
     DocumentKind.PURCHASE_ORDER: [("send_purchase_order", "Envoyer la commande au fournisseur")],
+    DocumentKind.CUSTOMER_INVOICE: [("payment_reminder", "Préparer une relance de paiement")],
+    DocumentKind.CUSTOMER_CREDIT_NOTE: [("credit_note_offer", "Proposer l'avoir au client")],
+    DocumentKind.RECEPTION: [("supplier_claim", "Préparer une réclamation fournisseur")],
+    DocumentKind.SUPPLIER_CREDIT_NOTE: [("supplier_claim", "Préparer la demande d'avoir")],
+}
+
+
+# Wording of status buttons that record something the OTHER party did:
+# the user records it, the software does not claim it happened by itself.
+_STATUS_ACTION_LABELS: dict[tuple[DocumentKind, str], str] = {
+    (DocumentKind.CUSTOMER_ORDER, "sent"): "Marquer comme transmise au client",
+    (DocumentKind.CUSTOMER_ORDER, "acknowledged"): "Enregistrer l'accusé de réception du client",
+    (DocumentKind.CUSTOMER_CREDIT_NOTE, "submitted"): "Marquer comme soumis au client",
+    (DocumentKind.CUSTOMER_CREDIT_NOTE, "accepted"): "Enregistrer l'acceptation du client",
+    (DocumentKind.CUSTOMER_CREDIT_NOTE, "rejected"): "Enregistrer le refus du client",
+    (DocumentKind.CUSTOMER_CREDIT_NOTE, "draft"): "Le client demande une modification",
+    (DocumentKind.SUPPLIER_CREDIT_NOTE, "confirmed"): "Enregistrer la confirmation du fournisseur",
+    (DocumentKind.SUPPLIER_CREDIT_NOTE, "rejected"): "Enregistrer le refus du fournisseur",
 }
 
 
@@ -197,8 +215,10 @@ def _document_actions(user: CurrentUser, doc: CommercialDocument) -> list[Action
     actions: list[ActionItem] = []
     can_edit = user.can(KIND_WRITE_PERMISSION[doc.kind])
     no_right = None if can_edit else "Votre rôle ne permet pas de modifier ce document."
-    for status in allowed_transitions(doc.kind, doc.status):
-        actions.append(ActionItem(f"status:{status}", f"Passer à « {status_label(doc.kind, status)} »", "status", can_edit, no_right, {"status": status}))
+    # System-only statuses (settlement, validation, imputation) are not
+    # buttons: they follow the billing actions below (app.billing).
+    for status in manual_transitions(doc.kind, doc.status):
+        actions.append(ActionItem(f"status:{status}", _STATUS_ACTION_LABELS.get((doc.kind, status), f"Passer à « {status_label(doc.kind, status)} »"), "status", can_edit, no_right, {"status": status}))
     for target in DERIVATIONS.get(doc.kind, ()):
         permitted = user.can(KIND_WRITE_PERMISSION[target])
         actions.append(
@@ -213,6 +233,16 @@ def _document_actions(user: CurrentUser, doc: CommercialDocument) -> list[Action
         actions.append(ActionItem(f"email:{purpose}", label, "email", can_draft, None if can_draft else "Votre rôle ne permet pas de préparer des emails.", {"purpose": purpose}))
     if doc.kind == DocumentKind.PURCHASE_REQUEST:
         actions.append(ActionItem("benchmark", "Comparer les fournisseurs", "navigate", True, None, {"anchor": "benchmark"}))
+    # V2.2 billing actions live in their panels (anchors) -- the panel checks
+    # the rule, the API checks the right (app.billing.router).
+    can_finance = user.can(WRITE_FINANCE)
+    if doc.kind in {DocumentKind.CUSTOMER_INVOICE, DocumentKind.SUPPLIER_INVOICE} and doc.status in {"issued", "approved", "partially_paid"}:
+        actions.append(ActionItem("payment", "Enregistrer un règlement", "navigate", can_finance, None if can_finance else "Réservé à la finance.", {"anchor": "reglements"}))
+    if doc.kind in {DocumentKind.CUSTOMER_DELIVERY, DocumentKind.RECEPTION} and doc.status in {"delivered", "received"}:
+        can_ops = user.can(WRITE_OPERATIONS)
+        actions.append(ActionItem("nonconformity", "Signaler une non-conformité", "navigate", can_ops, None if can_ops else "Réservé aux opérations.", {"anchor": "suivi"}))
+    if doc.kind in {DocumentKind.CUSTOMER_CREDIT_NOTE, DocumentKind.SUPPLIER_CREDIT_NOTE} and doc.status in {"accepted", "validated", "confirmed", "applied"}:
+        actions.append(ActionItem("credit", "Suivre l'avoir", "navigate", True, None, {"anchor": "avoir"}))
     return actions
 
 

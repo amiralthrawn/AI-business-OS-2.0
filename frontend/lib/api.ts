@@ -53,6 +53,10 @@ import type {
   DocumentSummary,
   EmailAnalysis,
   FollowUps,
+  BillingOverview,
+  CreditView,
+  PartyAccount,
+  Settlement,
   CampaignPerformance,
   FollowUpPerformance,
   MailboxOverview,
@@ -419,3 +423,22 @@ export const setWebsiteUrl = (url: string | null) => sendJSON<{ website_url: str
 export const runWebsiteAudit = () => sendJSON<AIRunView & { proposals: WebsiteProposal[] }>("POST", "/website/audit", undefined, "Analyse impossible");
 export const submitWebsiteProposal = (id: string) =>
   sendJSON<WebsiteProposal>("POST", `/website/proposals/${id}/submit`, undefined, "Soumission impossible");
+
+
+// V2.2 -- billing (payments, instalments, accounts, credit notes, deliveries)
+export const getBillingOverview = () => getJSON<BillingOverview>("/billing/overview", "Suivi financier indisponible");
+export const getCustomerAccount = (id: string) => getJSON<PartyAccount>(`/billing/accounts/customer/${id}`, "Compte client indisponible");
+export const getSupplierAccount = (id: string) => getJSON<PartyAccount>(`/billing/accounts/supplier/${id}`, "Compte fournisseur indisponible");
+export const recordPayment = (payload: { amount: number; invoice_id?: string; customer_id?: string; supplier_id?: string; occurred_at?: string; label?: string }) =>
+  sendJSON<{ movement_id: string; settlement: Settlement | null }>("POST", "/billing/payments", payload, "Enregistrement du paiement impossible");
+export const allocatePayment = (movementId: string, invoiceId: string) =>
+  sendJSON<Settlement>("POST", `/billing/payments/${movementId}/allocate`, { invoice_id: invoiceId }, "Rapprochement impossible");
+export const setInstallments = (docId: string, installments: { due_at: string; amount: number; label?: string }[]) =>
+  sendJSON<Settlement>("PUT", `/billing/documents/${docId}/installments`, { installments }, "Échéancier refusé");
+export const requestCreditValidation = (docId: string) =>
+  sendJSON<{ task_id: string; credit: CreditView }>("POST", `/billing/credit-notes/${docId}/request-validation`, undefined, "Demande de validation impossible");
+export const applyCreditNote = (docId: string) => sendJSON<CreditView>("POST", `/billing/credit-notes/${docId}/apply`, undefined, "Imputation impossible");
+export const recordRefund = (docId: string, payload: { occurred_at?: string } = {}) =>
+  sendJSON<CreditView>("POST", `/billing/credit-notes/${docId}/refund`, payload, "Enregistrement du remboursement impossible");
+export const reportNonconformity = (docId: string, payload: { line_id: string; quantity: number; note: string }) =>
+  sendJSON<{ risk_id: string; risk_created: boolean }>("POST", `/billing/documents/${docId}/nonconformity`, payload, "Signalement impossible");

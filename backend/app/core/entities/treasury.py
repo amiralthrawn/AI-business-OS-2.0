@@ -47,11 +47,17 @@ class CashMovement(Base, IdMixin, TimestampMixin):
     # "actual" | "planned" | "estimated"
     status: Mapped[str] = mapped_column(String(10), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    # "customer_payment" | "supplier_payment" | "salary" | "tax" | "loan" | "rent" | "other"
+    # "customer_payment" | "supplier_payment" | "customer_refund" | "salary" | "tax" | "loan" | "rent" | "other"
     category: Mapped[str] = mapped_column(String(30), nullable=False, default="other")
     label: Mapped[str | None] = mapped_column(String(255))
     counterparty: Mapped[str | None] = mapped_column(String(160))
     document_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("commercial_documents.id"), nullable=True)
+    # The paying/paid party. A customer payment with a customer but no
+    # document is received and attributed but NOT YET reconciled with an
+    # invoice ("à rapprocher"); `document_id` set = allocated to that invoice
+    # (or, for a refund, to the credit note it pays back).
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("customers.id"), nullable=True, index=True)
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("suppliers.id"), nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(40), nullable=False, default="manual")
 
 

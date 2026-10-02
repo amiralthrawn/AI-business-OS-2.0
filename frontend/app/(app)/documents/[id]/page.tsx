@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import CreditNotePanel from "@/components/billing/CreditNotePanel";
+import FulfilmentPanel from "@/components/billing/FulfilmentPanel";
+import OrderPaymentCard from "@/components/billing/OrderPaymentCard";
+import SettlementPanel from "@/components/billing/SettlementPanel";
 import BenchmarkPanel from "@/components/objects/BenchmarkPanel";
 import DocumentLines from "@/components/objects/DocumentLines";
 import MarginPanel from "@/components/objects/MarginPanel";
@@ -30,6 +34,8 @@ const WRITE_PERMISSION: Record<DocumentKind, string> = {
   purchase_order: "write:procurement",
   reception: "write:operations",
   supplier_invoice: "write:finance",
+  customer_credit_note: "write:sales",
+  supplier_credit_note: "write:procurement",
 };
 
 const DATE_LABELS: Partial<Record<DocumentKind, string>> = {
@@ -39,6 +45,7 @@ const DATE_LABELS: Partial<Record<DocumentKind, string>> = {
   reception: "Attendue le",
   customer_invoice: "Échéance",
   supplier_invoice: "Échéance",
+  customer_delivery: "Livraison prévue",
 };
 
 const AI_SUGGESTIONS: Partial<Record<DocumentKind, string[]>> = {
@@ -47,6 +54,8 @@ const AI_SUGGESTIONS: Partial<Record<DocumentKind, string[]>> = {
   customer_request: ["Quelle marge peut-on espérer sur cette affaire ?"],
   purchase_request: ["Quel fournisseur contacter pour cette demande ?"],
   purchase_order: ["Quels risques concernent cette commande fournisseur ?"],
+  customer_invoice: ["Où en est le règlement de cette facture ?"],
+  customer_credit_note: ["Pourquoi cet avoir a-t-il été proposé ?"],
 };
 
 function sectionFor(doc: DocumentDetail) {
@@ -88,6 +97,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
               </Link>
             )}
             {doc.party?.status === "prospect" && <Badge label="Prospect" tone="warning" />}
+            {doc.source === "simulated" && <Badge label="Données de démonstration" tone="danger" />}
             {doc.contact && <span>· {doc.contact.name}</span>}
           </div>
         </div>
@@ -120,6 +130,21 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
               <span className="text-right font-mono">{doc.external_reference}</span>
             </>
           )}
+          {doc.payment_terms && (
+            <>
+              <span className="text-text-faint">Conditions</span>
+              <span className="text-right">{doc.payment_terms}</span>
+            </>
+          )}
+          {(doc.carrier || doc.tracking_number) && (
+            <>
+              <span className="text-text-faint">Transporteur</span>
+              <span className="text-right">
+                {doc.carrier}
+                {doc.tracking_number && <span className="num block text-text-faint">{doc.tracking_number}</span>}
+              </span>
+            </>
+          )}
         </Card>
       </div>
 
@@ -149,6 +174,25 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
       )}
 
       <DocumentLines doc={doc} canEdit={canEdit} />
+
+      {/* V2.2 -- paiements, livraisons, avoirs (brain/billing.md) */}
+      {doc.settlement && <SettlementPanel settlement={doc.settlement} docId={doc.id} canWrite={can(me?.permissions, "write:finance")} />}
+      {doc.payment && <OrderPaymentCard payment={doc.payment} partyName={doc.party?.name} />}
+      {(doc.kind === "customer_order" || doc.kind === "purchase_order") && (
+        <FulfilmentPanel fulfilment={doc.fulfilment} docId={doc.id} lines={doc.lines} canReport={false} isPhysicalDoc={false} />
+      )}
+      {(doc.kind === "customer_delivery" || doc.kind === "reception") && (
+        <FulfilmentPanel
+          fulfilment={doc.fulfilment}
+          docId={doc.id}
+          lines={doc.lines}
+          canReport={can(me?.permissions, "write:operations") && (doc.status === "delivered" || doc.status === "received")}
+          isPhysicalDoc
+        />
+      )}
+      {doc.credit && (
+        <CreditNotePanel credit={doc.credit} kind={doc.kind} docId={doc.id} canSales={can(me?.permissions, "write:sales")} canFinance={can(me?.permissions, "write:finance")} />
+      )}
 
       {doc.margin && <MarginPanel margin={doc.margin} />}
 
