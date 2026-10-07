@@ -9,6 +9,7 @@ through this one function instead, so the day a request carries a tenant
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.core.entities import Company
 from app.database import get_db
 
@@ -16,5 +17,5 @@ from app.database import get_db
 def current_company(db: Session = Depends(get_db)) -> Company:
     company = db.query(Company).first()
     if company is None:
-        raise HTTPException(status_code=404, detail="No company configured yet")
+        raise HTTPException(status_code=404, detail=tx("Aucune entreprise n'est encore configurée", "No company is configured yet"))
     return company

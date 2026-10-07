@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, field
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import money, tx
 from app.core.entities import (
     CommercialDocument,
     CostItem,
@@ -39,14 +40,35 @@ from app.objects.graph import document_chain
 
 K = DocumentKind
 
-STAGE_LABELS = {
-    "actual": "Coût réel (facture fournisseur validée)",
-    "committed": "Coût engagé (commande fournisseur)",
-    "quoted": "Coût devisé (devis fournisseur)",
-    "catalog": "Prix catalogue fournisseur",
-    "reference": "Coût de référence estimé",
-    "unknown": "Coût inconnu",
+STAGES: dict[str, tuple[str, str]] = {  # (French, English)
+    "actual": ("Coût réel (facture fournisseur validée)", "Actual cost (approved supplier invoice)"),
+    "committed": ("Coût engagé (commande fournisseur)", "Committed cost (purchase order)"),
+    "quoted": ("Coût devisé (devis fournisseur)", "Quoted cost (supplier quote)"),
+    "catalog": ("Prix catalogue fournisseur", "Supplier catalogue price"),
+    "reference": ("Coût de référence estimé", "Estimated reference cost"),
+    "unknown": ("Coût inconnu", "Unknown cost"),
 }
+
+
+class _StageLabels:
+    """STAGE_LABELS[stage] in the active language."""
+
+    def __getitem__(self, stage: str) -> str:
+        return tx(*STAGES[stage])
+
+
+STAGE_LABELS = _StageLabels()
+
+
+def display_cost_source(stored: str | None) -> str | None:
+    """A sales line keeps the label of its planned-cost source as written
+    when it was created (French); shown in the active language when it is
+    one of ours, as written otherwise."""
+
+    for fr, en in STAGES.values():
+        if stored in (fr, en):
+            return tx(fr, en)
+    return stored
 _CURRENT_ORDER = ("actual", "committed", "quoted", "catalog", "reference")
 _PLANNED_ORDER = ("quoted", "catalog", "reference")
 _COST_DOC_PRIORITY = (K.SUPPLIER_INVOICE, K.PURCHASE_ORDER, K.SUPPLIER_QUOTE, K.CUSTOMER_ORDER, K.CUSTOMER_QUOTE)
@@ -195,7 +217,8 @@ def _snapshot_source(line) -> CostSource | None:
     if line.planned_unit_cost is None:
         return None
     basis = (line.planned_cost_basis or ValueBasis.ESTIMATED).value
-    label = f"Estimation au chiffrage ({line.planned_cost_source or 'source non précisée'})"
+    source = display_cost_source(line.planned_cost_source) or tx("source non précisée", "source not specified")
+    label = tx(f"Estimation au chiffrage ({source})", f"Estimate when quoting ({source})")
     return CostSource("planned", line.planned_unit_cost, basis, "medium", label)
 
 
@@ -249,10 +272,35 @@ def _view(revenue: float, line_costs: list[float | None], line_bases: list[str],
     return MarginView(round(revenue, 2), round(cost_min, 2), round(cost_max, 2), round(margin_min, 2), round(margin_max, 2), pct(margin_min), pct(margin_max), cost_basis)
 
 
+# Wording of the values written into explanations, in the active language.
+_BASIS = {
+    "observed": ("réel", "actual"), "declared": ("déclaré", "declared"), "estimated": ("estimé", "estimated"),
+    "benchmark": ("référence marché", "market reference"), "simulated": ("simulé", "simulated"), "unknown": ("inconnu", "unknown"),
+}
+_COST_KIND = {
+    "transport": ("transport", "transport"), "customs": ("douane", "customs"), "insurance": ("assurance", "insurance"),
+    "handling": ("manutention", "handling"), "other": ("autre coût", "other cost"),
+}
+
+
+def _eur(value: float) -> str:
+    return money(value)
+
+
+def _basis_label(basis) -> str:
+    raw = str(getattr(basis, "value", basis))
+    return tx(*_BASIS[raw]) if raw in _BASIS else raw
+
+
+def _kind_label(kind) -> str:
+    raw = str(getattr(kind, "value", kind))
+    return tx(*_COST_KIND[raw]) if raw in _COST_KIND else raw
+
+
 def _fmt_range(r: CostRange) -> str:
     """A range stays a range in every sentence -- never its midpoint."""
 
-    return f"{r.min:.2f}" if abs(r.max - r.min) < 0.005 else f"{r.min:.2f}–{r.max:.2f}"
+    return _eur(r.min) if abs(r.max - r.min) < 0.005 else tx(f"{_eur(r.min)} à {_eur(r.max)}", f"{_eur(r.min)} to {_eur(r.max)}")
 
 
 def _mid(r: CostRange | None) -> float | None:
@@ -261,7 +309,7 @@ def _mid(r: CostRange | None) -> float | None:
 
 def compute_document_margin(session: Session, doc: CommercialDocument) -> DocumentMargin:
     if doc.kind not in {K.CUSTOMER_REQUEST, K.CUSTOMER_QUOTE, K.CUSTOMER_ORDER, K.CUSTOMER_INVOICE}:
-        raise ValueError("La marge se calcule sur une demande, un devis, une commande ou une facture client")
+        raise ValueError(tx("La marge se calcule sur une demande, un devis, une commande ou une facture client", "The margin is computed on a customer request, quote, order or invoice"))
 
     chain = document_chain(session, doc.id)
     missing: list[str] = []
@@ -272,13 +320,13 @@ def compute_document_margin(session: Session, doc: CommercialDocument) -> Docume
         product = session.get(Product, line.product_id) if line.product_id else None
         line_revenue = line.quantity * line.unit_price if line.unit_price is not None else None
         if line_revenue is None:
-            missing.append(f"Prix de vente inconnu : {line.description or 'ligne sans produit'}")
+            missing.append(tx(f"Prix de vente inconnu : {line.description or 'ligne sans produit'}", f"Unknown selling price: {line.description or 'line without product'}"))
         revenue += line_revenue or 0.0
         sources = _collect_line_sources(session, chain, product) if product else {}
         current = _pick(sources, _CURRENT_ORDER)
         planned = _snapshot_source(line) or _pick(sources, _PLANNED_ORDER)
         if current.unit_cost is None:
-            missing.append(f"Coût inconnu : {line.description or (product.name if product else 'ligne')}")
+            missing.append(tx(f"Coût inconnu : {line.description or (product.name if product else 'ligne')}", f"Unknown cost: {line.description or (product.name if product else 'line')}"))
         current_cost = current.unit_cost * line.quantity if current.unit_cost is not None else None
         planned_cost = planned.unit_cost * line.quantity if planned.unit_cost is not None else None
         lines.append(
@@ -299,7 +347,7 @@ def compute_document_margin(session: Session, doc: CommercialDocument) -> Docume
         totals = {o.id: sum(ln.quantity * (ln.unit_price or 0) for ln in o.lines) for o in orders}
         grand = sum(totals.values())
         share = totals.get(doc.id, 0) / grand if grand else 1 / len(orders)
-        allocation_note = f"Coûts annexes de l'affaire répartis au prorata du chiffre d'affaires ({share:.0%} sur cette commande)."
+        allocation_note = tx(f"Coûts annexes de l'affaire répartis au prorata du chiffre d'affaires ({share:.0%} sur cette commande).", f"Deal-level additional costs split pro rata to revenue ({share:.0%} on this order).")
     cost_items = _cost_items(chain, share)
 
     current_view = _view(revenue, [ln.current_cost for ln in lines], [ln.current.basis for ln in lines], [c.current for c in cost_items])
@@ -311,21 +359,29 @@ def compute_document_margin(session: Session, doc: CommercialDocument) -> Docume
             delta = ln.current_cost - ln.planned_cost
             variances.append(
                 Variance(
-                    f"Coût produit · {ln.product_name}", ln.planned_cost, ln.current_cost, round(delta, 2),
-                    f"{ln.planned.source_label} {ln.planned.unit_cost:.2f} → {ln.current.source_label.lower()} "
-                    f"{ln.current.unit_cost:.2f} par unité ({ln.current.document_number or 'catalogue'}).",
+                    tx(f"Coût produit · {ln.product_name}", f"Product cost · {ln.product_name}"), ln.planned_cost, ln.current_cost, round(delta, 2),
+                    f"{ln.planned.source_label} {_eur(ln.planned.unit_cost)} → {ln.current.source_label.lower()} "
+                    + tx(
+                        f"{_eur(ln.current.unit_cost)} par unité ({ln.current.document_number or 'catalogue'}).",
+                        f"{_eur(ln.current.unit_cost)} per unit ({ln.current.document_number or 'catalogue'}).",
+                    ),
                 )
             )  # fmt: skip
     for item in cost_items:
         planned_mid, current_mid = _mid(item.planned), _mid(item.current)
         if current_mid is not None and (planned_mid is None or abs(current_mid - planned_mid) > 0.005):
             delta = current_mid - (planned_mid or 0.0)
+            kind_label = _kind_label(item.kind).capitalize()
+            current_text = f"{_fmt_range(item.current)} ({_basis_label(item.current.basis)})"
             explanation = (
-                f"{item.kind} : prévu {_fmt_range(item.planned)} ({item.planned.basis}), constaté {_fmt_range(item.current)} ({item.current.basis})."
+                tx(
+                    f"{kind_label} : prévu {_fmt_range(item.planned)} ({_basis_label(item.planned.basis)}), constaté {current_text}.",
+                    f"{kind_label}: planned {_fmt_range(item.planned)} ({_basis_label(item.planned.basis)}), actual {current_text}.",
+                )
                 if item.planned is not None
-                else f"{item.kind} : coût non prévu, {_fmt_range(item.current)} ({item.current.basis})."
+                else tx(f"{kind_label} : coût non prévu, {current_text}.", f"{kind_label}: unplanned cost, {current_text}.")
             )
-            variances.append(Variance(f"Coût annexe · {item.kind}", planned_mid, current_mid, round(delta, 2), explanation))
+            variances.append(Variance(tx(f"Coût annexe · {_kind_label(item.kind)}", f"Additional cost · {_kind_label(item.kind)}"), planned_mid, current_mid, round(delta, 2), explanation))
     variances.sort(key=lambda v: -abs(v.delta))
 
     revenue_basis = "observed" if any(d.kind == K.CUSTOMER_INVOICE and d.status in {"issued", "partially_paid", "paid"} for d in chain) else "declared"

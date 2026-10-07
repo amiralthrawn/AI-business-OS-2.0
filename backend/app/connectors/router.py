@@ -3,6 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.connectors.ingestion import sync_connector
 from app.connectors.registry import connector_registry
 from app.core.entities import Communication, Company
@@ -16,7 +17,7 @@ _SOURCE_BY_CONNECTOR = {"email": "mock_email", "calendar": "mock_calendar", "web
 def _status(db: Session, connector_type: str) -> dict:
     source = _SOURCE_BY_CONNECTOR.get(connector_type)
     if source is None:
-        raise HTTPException(status_code=404, detail=f"Unknown connector type: '{connector_type}'")
+        raise HTTPException(status_code=404, detail=tx(f"Connecteur inconnu : « {connector_type} »", f'Unknown connector: "{connector_type}"'))
 
     query = db.query(Communication).filter_by(source=source)
     last = query.order_by(Communication.occurred_at.desc()).first()
@@ -45,7 +46,7 @@ def trigger_connector_sync(connector_type: str, db: Session = Depends(get_db)) -
 
     company = db.query(Company).first()
     if company is None:
-        raise HTTPException(status_code=404, detail="No company configured yet")
+        raise HTTPException(status_code=404, detail=tx("Aucune entreprise n'est encore configurée", "No company is configured yet"))
 
     try:
         provider = connector_registry.get_connector(connector_type)

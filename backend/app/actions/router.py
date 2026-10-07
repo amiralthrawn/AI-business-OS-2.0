@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user
 from app.actions.executor import ActionExecutor
 from app.actions.schemas import TaskCreate, TaskRead, TaskStatusUpdate
@@ -22,7 +23,7 @@ def _ensure_can_decide(db: Session, user: CurrentUser, task_id: uuid.UUID) -> No
 
     task = db.get(Task, task_id)
     if task is not None and not user.can_approve(task.domain):
-        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas de valider cette action.")
+        raise HTTPException(status_code=403, detail=tx("Votre rôle ne permet pas de valider cette action.", "Your role does not allow approving this action."))
 
 
 @router.get("", response_model=list[TaskRead])
@@ -38,7 +39,7 @@ def create_task(
 ) -> Task:
     company = db.query(Company).first()
     if company is None:
-        raise HTTPException(status_code=404, detail="No company configured yet")
+        raise HTTPException(status_code=404, detail=tx("Aucune entreprise n'est encore configurée", "No company is configured yet"))
 
     return ActionsService(db, event_bus).create_manual_task(
         company_id=company.id,
@@ -55,7 +56,7 @@ def create_task(
 def get_task(task_id: uuid.UUID, db: Session = Depends(get_db)) -> Task:
     task = db.get(Task, task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        raise HTTPException(status_code=404, detail=tx(f"Tâche {task_id} introuvable", f"Task {task_id} not found"))
     return task
 
 

@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, money, tx
 from app.core.analytics import _as_aware_utc, compute_company_financials
 from app.core.entities import (
     BankAccount,
@@ -109,7 +110,7 @@ def _document_flows(session: Session, company_id: uuid.UUID, now: datetime) -> l
             view = settlement(session, doc, now)
             if not view.get("available"):
                 continue
-            direction, category, label = ("in", "customer_payment", "Facture client") if doc.kind == DocumentKind.CUSTOMER_INVOICE else ("out", "supplier_payment", "Facture fournisseur")
+            direction, category, label = ("in", "customer_payment", tx("Facture client", "Customer invoice")) if doc.kind == DocumentKind.CUSTOMER_INVOICE else ("out", "supplier_payment", tx("Facture fournisseur", "Supplier invoice"))
             for inst in view["installments"]:
                 if inst["remaining"] > 0.005:
                     when = max(inst["due_at"] or due, now)
@@ -117,7 +118,7 @@ def _document_flows(session: Session, company_id: uuid.UUID, now: datetime) -> l
                     flows.append(Flow(when, direction, inst["remaining"], "declared", category, f"{label} {doc.number}{suffix}", document_id=doc.id, source="document"))
         elif doc.kind == DocumentKind.CUSTOMER_ORDER and doc.status in {"confirmed", "delivered"}:
             # Not invoiced yet: the cash is expected, not committed.
-            flows.append(Flow(due + timedelta(days=DEFAULT_PAYMENT_DELAY_DAYS), "in", total, "estimated", "customer_payment", f"Commande {doc.number} (non facturée)", document_id=doc.id, source="document"))
+            flows.append(Flow(due + timedelta(days=DEFAULT_PAYMENT_DELAY_DAYS), "in", total, "estimated", "customer_payment", tx(f"Commande {doc.number} (non facturée)", f"Order {doc.number} (not invoiced)"), document_id=doc.id, source="document"))
     # Refunds owed on imputed credit notes are committed outflows.
     credit_notes = session.query(CommercialDocument).filter(CommercialDocument.company_id == company_id, CommercialDocument.kind == DocumentKind.CUSTOMER_CREDIT_NOTE, CommercialDocument.status == "applied")
     for cn in credit_notes.all():
@@ -211,7 +212,7 @@ def treasury_overview(session: Session, company_id: uuid.UUID) -> dict:
         "below_min_cash": bool(min_cash is not None and projection and min(p.low for p in projection) < min_cash),
         "upcoming": [asdict(f) for f in company_flows[:30]],
         "accounts": [asdict(v) for v in views],
-        "method": "Solde des comptes + flux planifiés et factures (déclarés) ; la borne haute ajoute les encaissements estimés (commandes non facturées).",
+        "method": tx("Solde des comptes + flux planifiés et factures (déclarés) ; la borne haute ajoute les encaissements estimés (commandes non facturées).", "Account balances + planned flows and invoices (declared); the upper bound adds estimated receipts (orders not invoiced)."),
     }
 
 
@@ -222,14 +223,21 @@ def monitor_cash(session: Session, event_bus: EventBus, company_id: uuid.UUID) -
 
     overview = treasury_overview(session, company_id)
     if not overview["below_min_cash"]:
-        return {"risk_created": False, "reason": "Projection au-dessus du seuil déclaré" if overview["min_cash"] is not None else "Aucun seuil de trésorerie déclaré"}
+        return {"risk_created": False, "reason": tx("Projection au-dessus du seuil déclaré", "Projection above the declared threshold") if overview["min_cash"] is not None else tx("Aucun seuil de trésorerie déclaré", "No cash threshold declared")}
     title = "Trésorerie projetée sous le seuil minimum"
     if session.query(Risk.id).filter_by(company_id=company_id, title=title, status=RiskStatus.OPEN).first() is not None:
-        return {"risk_created": False, "reason": "Risque déjà ouvert"}
+        return {"risk_created": False, "reason": tx("Risque déjà ouvert", "Risk already open")}
     low = min(p["low"] for p in overview["projection"])
+    texts = both(lambda: {
+        "title": tx(title, "Projected cash below the minimum threshold"),
+        "description": tx(
+            f"Projection basse à {money(low, 0)} sur 90 jours, sous le seuil déclaré de {money(overview['min_cash'], 0)}.",
+            f"Low projection of {money(low, 0)} over 90 days, below the declared threshold of {money(overview['min_cash'], 0)}.",
+        ),
+    })  # fmt: skip
     risk = Risk(
         company_id=company_id, title=title, severity=RiskSeverity.HIGH, status=RiskStatus.OPEN,
-        description=f"Projection basse à {low:,.0f} € sur 90 jours, sous le seuil déclaré de {overview['min_cash']:,.0f} €.".replace(",", " "),
+        description=texts["fr"]["description"], i18n=texts,
         related_entity_type=RelatedEntityType.COMPANY, related_entity_id=company_id,
     )  # fmt: skip
     session.add(risk)
@@ -279,15 +287,15 @@ def estimate_valuation(session: Session, company_id: uuid.UUID) -> Valuation:
     taxes_due = sum(f["amount"] for f in treasury["upcoming"] if f["category"] == "tax" and f["direction"] == "out")
 
     inputs = [
-        {"label": "Chiffre d'affaires 12 mois", "value": round(revenue, 2), "basis": "observed", "source": "Écritures de vente"},
-        {"label": "Marge globale", "value": financials.overall_margin_pct, "basis": "observed", "source": "Écritures"},
-        {"label": "Croissance vs 12 mois précédents", "value": round((revenue - previous) / previous, 4) if previous else None, "basis": "observed" if previous else "unknown", "source": "Écritures"},
-        {"label": "Trésorerie", "value": treasury["cash_now"], "basis": treasury["cash_basis"], "source": "Comptes"},
-        {"label": "Dette", "value": treasury["debt_outstanding"], "basis": "declared", "source": "Prêts"},
-        {"label": "Impôts à payer (planifiés)", "value": round(taxes_due, 2), "basis": "declared", "source": "Flux planifiés"},
+        {"label": tx("Chiffre d'affaires 12 mois", "12-month revenue"), "value": round(revenue, 2), "basis": "observed", "source": tx("Écritures de vente", "Sales entries")},
+        {"label": tx("Marge globale", "Overall margin"), "value": financials.overall_margin_pct, "basis": "observed", "source": tx("Écritures", "Entries")},
+        {"label": tx("Croissance vs 12 mois précédents", "Growth vs previous 12 months"), "value": round((revenue - previous) / previous, 4) if previous else None, "basis": "observed" if previous else "unknown", "source": tx("Écritures", "Entries")},
+        {"label": tx("Trésorerie", "Cash"), "value": treasury["cash_now"], "basis": treasury["cash_basis"], "source": tx("Comptes", "Accounts")},
+        {"label": tx("Dette", "Debt"), "value": treasury["debt_outstanding"], "basis": "declared", "source": tx("Prêts", "Loans")},
+        {"label": tx("Impôts à payer (planifiés)", "Taxes payable (planned)"), "value": round(taxes_due, 2), "basis": "declared", "source": tx("Flux planifiés", "Planned flows")},
     ]
     if revenue <= 0:
-        return Valuation(declared, None, None, "unknown", "none", inputs, "Chiffre d'affaires inconnu : aucune estimation possible.")
+        return Valuation(declared, None, None, "unknown", "none", inputs, tx("Chiffre d'affaires inconnu : aucune estimation possible.", "Revenue unknown: no estimate possible."))
 
     if settings.get("revenue_multiple_min") and settings.get("revenue_multiple_max"):
         lo, hi, multiple_basis = float(settings["revenue_multiple_min"]), float(settings["revenue_multiple_max"]), "declared"
@@ -303,13 +311,13 @@ def estimate_valuation(session: Session, company_id: uuid.UUID) -> Valuation:
         hi *= 1.15
     net_cash = treasury["cash_now"] - treasury["debt_outstanding"] - taxes_due
     estimated_min, estimated_max = revenue * lo + net_cash, revenue * hi + net_cash
-    inputs.append({"label": "Multiple de CA retenu", "value": f"{lo:.2f}–{hi:.2f}×", "basis": multiple_basis, "source": "Déclaré" if multiple_basis == "declared" else "Référence générique PME"})
+    inputs.append({"label": tx("Multiple de CA retenu", "Revenue multiple used"), "value": f"{lo:.2f}–{hi:.2f}×", "basis": multiple_basis, "source": tx("Déclaré", "Declared") if multiple_basis == "declared" else tx("Référence générique PME", "Generic SME reference")})
     confidence = "medium" if multiple_basis == "declared" and growth is not None else "low"
     if treasury["cash_basis"] == "simulated":
         confidence = "low"
     return Valuation(
         declared, round(max(estimated_min, 0.0), -3), round(max(estimated_max, 0.0), -3), "estimated", confidence, inputs,
-        "Valeur d'entreprise = CA 12 mois × multiple (ajusté marge/croissance) ; valeur des titres = + trésorerie − dette − impôts dus.",
+        tx("Valeur d'entreprise = CA 12 mois × multiple (ajusté marge/croissance) ; valeur des titres = + trésorerie − dette − impôts dus.", "Enterprise value = 12-month revenue × multiple (adjusted for margin/growth); equity value = + cash − debt − taxes due."),
     )  # fmt: skip
 
 

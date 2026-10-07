@@ -2,6 +2,7 @@ import Link from "next/link";
 import Card from "@/components/ui/Card";
 import { getComplianceRequests, getEmployees, getMe, getOwnership, getSkillsGap, getTreasury } from "@/lib/api";
 import { can, fmtMoneyRange } from "@/lib/objects";
+import { valueLabel } from "@/lib/labels";
 
 // V2.1 "Vue dirigeant": the director-level signals, each shown only to a
 // profile allowed to see it and each a link into its space. Home stays an
@@ -23,7 +24,7 @@ export default async function HomeDirector() {
     cards.push({ href: "/direction", label: "Trésorerie à 90 jours", value: p90 ? fmtMoneyRange(p90.low, p90.high) : "—", hint: treasury.cash_basis === "simulated" ? "données simulées" : "projection déterministe", alert: treasury.below_min_cash });
   }
   if (ownership?.valuation.estimated_min != null) {
-    cards.push({ href: "/direction?tab=ownership", label: "Valeur estimée", value: fmtMoneyRange(ownership.valuation.estimated_min, ownership.valuation.estimated_max), hint: `estimation · confiance ${ownership.valuation.confidence}` });
+    cards.push({ href: "/direction?tab=ownership", label: "Valeur estimée", value: fmtMoneyRange(ownership.valuation.estimated_min, ownership.valuation.estimated_max), hint: `estimation · confiance ${valueLabel("confidence", ownership.valuation.confidence)}` });
   }
   if (employees) {
     const withCost = employees.filter((e) => e.cost && e.cost.basis !== "unknown");

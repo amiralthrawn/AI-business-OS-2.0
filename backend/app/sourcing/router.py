@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import current_locale, tx
 from app.access.deps import CurrentUser, require
 from app.access.policy import VIEW_PROCUREMENT, WRITE_PROCUREMENT
 from app.core.entities import AIRun, CommercialDocument, Company, SourcingLead
@@ -25,10 +26,27 @@ class LeadIn(BaseModel):
     note: str | None = None
 
 
+def _localized_text(text: str | None) -> str | None:
+    from app.sourcing.service import STEP_RULES as SOURCING_STEPS
+    from app.website.service import STEP_RULES as WEBSITE_STEPS
+
+    if current_locale() == "fr" or not text:
+        return text
+    for pattern, english in (*WEBSITE_STEPS, *SOURCING_STEPS):
+        m = pattern.match(text)
+        if m:
+            return english.format(**m.groupdict())
+    return text
+
+
 def run_out(run: AIRun | None) -> dict | None:
     if run is None:
         return None
-    return {"id": run.id, "kind": run.kind, "mode": run.mode, "status": run.status, "target": run.target, "started_at": run.started_at, "finished_at": run.finished_at, "steps": run.steps, "result": run.result}
+    from app.website.service import localized_result
+
+    steps = [step | {"label": _localized_text(step.get("label")), "detail": _localized_text(step.get("detail"))} for step in run.steps]
+    result = localized_result(run.result) if run.kind == "website_audit" else run.result
+    return {"id": run.id, "kind": run.kind, "mode": run.mode, "status": run.status, "target": run.target, "started_at": run.started_at, "finished_at": run.finished_at, "steps": steps, "result": result}
 
 
 def lead_out(lead: SourcingLead) -> dict:
@@ -42,7 +60,7 @@ def lead_out(lead: SourcingLead) -> dict:
 def _pr(db: Session, company: Company, pr_id: uuid.UUID) -> CommercialDocument:
     pr = db.get(CommercialDocument, pr_id)
     if pr is None or pr.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Demande d'achat introuvable")
+        raise HTTPException(status_code=404, detail=tx("Demande d'achat introuvable", "Purchase request not found"))
     return pr
 
 
@@ -88,7 +106,7 @@ def add_manual_lead(pr_id: uuid.UUID, payload: LeadIn, db: Session = Depends(get
 def convert(lead_id: uuid.UUID, db: Session = Depends(get_db), event_bus: EventBus = Depends(get_event_bus), company: Company = Depends(current_company), user: CurrentUser = Depends(require(WRITE_PROCUREMENT))) -> dict:
     lead = db.get(SourcingLead, lead_id)
     if lead is None or lead.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Piste introuvable")
+        raise HTTPException(status_code=404, detail=tx("Piste introuvable", "Lead not found"))
     try:
         quote = service.convert_lead(db, event_bus, lead, owner_user_id=user.profile.id if user.profile else None)
     except service.SourcingError as exc:
@@ -100,7 +118,7 @@ def convert(lead_id: uuid.UUID, db: Session = Depends(get_db), event_bus: EventB
 def discard(lead_id: uuid.UUID, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_PROCUREMENT))) -> dict:
     lead = db.get(SourcingLead, lead_id)
     if lead is None or lead.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Piste introuvable")
+        raise HTTPException(status_code=404, detail=tx("Piste introuvable", "Lead not found"))
     lead.status = "discarded"
     db.commit()
     return lead_out(lead)

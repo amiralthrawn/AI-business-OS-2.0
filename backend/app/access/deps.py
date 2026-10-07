@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.policy import can_approve_with, effective_permissions
 from app.core.entities import Role, UserProfile
 from app.database import get_db
@@ -51,10 +52,10 @@ def get_current_user(x_user_id: str | None = Header(default=None), db: Session =
     try:
         user_id = uuid.UUID(x_user_id)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Unknown user profile")
+        raise HTTPException(status_code=401, detail=tx("Profil utilisateur inconnu", "Unknown user profile"))
     profile = db.get(UserProfile, user_id)
     if profile is None or not profile.is_active:
-        raise HTTPException(status_code=401, detail="Unknown user profile")
+        raise HTTPException(status_code=401, detail=tx("Profil utilisateur inconnu", "Unknown user profile"))
     return CurrentUser(role=profile.role, profile=profile)
 
 
@@ -63,7 +64,7 @@ def require(permission: str):
 
     def dependency(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         if not user.can(permission):
-            raise HTTPException(status_code=403, detail=f"Votre profil n'a pas accès à cette partie du logiciel ({permission}).")
+            raise HTTPException(status_code=403, detail=tx(f"Votre profil n'a pas accès à cette partie du logiciel ({permission}).", f"Your profile does not have access to this part of the software ({permission})."))
         return user
 
     return dependency

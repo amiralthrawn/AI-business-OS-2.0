@@ -6,6 +6,7 @@ import Card from "@/components/ui/Card";
 import EmptyState from "@/components/ui/EmptyState";
 import { formatDateFR, formatMonthFR } from "@/lib/labels";
 import type { CampaignPerformance, CampaignView, CommunicationRow, FollowUpPerformance } from "@/lib/types";
+import { valueLabel } from "@/lib/labels";
 
 const PURPOSE: Record<string, string> = {
   reply: "Réponses",
@@ -237,7 +238,7 @@ function CampaignCard({ c, proposals }: { c: CampaignView; proposals: Communicat
             ))}
             {c.tasks.map((t) => (
               <li key={t.id}>
-                <Link href="/actions/tasks" className="text-text hover:underline">{t.title}</Link> <span className="text-[11.5px] text-text-faint">tâche · {t.status}</span>
+                <Link href="/actions/tasks" className="text-text hover:underline">{t.title}</Link> <span className="text-[11.5px] text-text-faint">tâche · {valueLabel("taskStatus", t.status)}</span>
               </li>
             ))}
           </ul>

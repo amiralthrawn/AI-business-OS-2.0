@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import text_of, tx
 from app.access.deps import CurrentUser, get_current_user, require
 from app.access.policy import VIEW_EMPLOYEE_COSTS, WRITE_PEOPLE
 from app.actions.service import ActionsService
@@ -90,7 +91,7 @@ class CandidateUpdate(BaseModel):
 def _employee(db: Session, company: Company, employee_id: uuid.UUID) -> Employee:
     employee = db.get(Employee, employee_id)
     if employee is None or employee.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Employé introuvable")
+        raise HTTPException(status_code=404, detail=tx("Employé introuvable", "Employee not found"))
     return employee
 
 
@@ -140,9 +141,9 @@ def get_employee(employee_id: uuid.UUID, db: Session = Depends(get_db), company:
     tasks = db.query(Task).filter(Task.assignee_employee_id == employee.id).order_by(Task.created_at.desc()).limit(50).all()
     return _employee_out(employee) | service.employee_view(db, employee, include_costs=include_costs) | {
         "can_view_costs": include_costs,
-        "task_list": [{"id": t.id, "title": t.title, "status": t.status.value, "due_at": t.due_at, "requires_decision": t.requires_decision} for t in tasks],
+        "task_list": [{"id": t.id, "title": text_of(t, "title"), "status": t.status.value, "due_at": t.due_at, "requires_decision": t.requires_decision} for t in tasks],
         "decisions": [
-            {"id": t.id, "title": t.title, "status": t.status.value, "category": t.category, "created_at": t.created_at}
+            {"id": t.id, "title": text_of(t, "title"), "status": t.status.value, "category": t.category, "created_at": t.created_at}
             for t in db.query(Task).filter(Task.related_entity_type == RelatedEntityType.EMPLOYEE, Task.related_entity_id == employee.id, Task.pending_action == service.HR_DECISION_ACTION).order_by(Task.created_at.desc()).all()
         ],
     }
@@ -154,7 +155,7 @@ def update_employee(employee_id: uuid.UUID, payload: EmployeeUpdate, db: Session
     changes = payload.model_dump(exclude_unset=True)
     if "job_title" in changes:
         # A title change is a promotion: it goes through a validated decision.
-        raise HTTPException(status_code=400, detail="Le poste change via une décision de promotion validée.")
+        raise HTTPException(status_code=400, detail=tx("Le poste change via une décision de promotion validée.", "The job title changes through an approved promotion decision."))
     for key, value in changes.items():
         setattr(employee, key, value)
     db.commit()
@@ -191,9 +192,9 @@ def assign_task(employee_id: uuid.UUID, payload: TaskIn, db: Session = Depends(g
 def propose_decision(employee_id: uuid.UUID, payload: DecisionIn, db: Session = Depends(get_db), event_bus: EventBus = Depends(get_event_bus), company: Company = Depends(current_company), user: CurrentUser = Depends(require(WRITE_PEOPLE))) -> dict:
     employee = _employee(db, company, employee_id)
     if payload.kind == "raise" and not user.can(VIEW_EMPLOYEE_COSTS):
-        raise HTTPException(status_code=403, detail="Proposer une augmentation nécessite l'accès aux rémunérations.")
+        raise HTTPException(status_code=403, detail=tx("Proposer une augmentation nécessite l'accès aux rémunérations.", "Proposing a raise requires access to compensation."))
     task = _guard(lambda: service.propose_decision(db, event_bus, employee, **payload.model_dump()), db)
-    return {"task_id": task.id, "status": task.status.value, "note": "Proposition en attente de validation par la direction — rien n'est appliqué avant."}
+    return {"task_id": task.id, "status": task.status.value, "note": tx("Proposition en attente de validation par la direction — rien n'est appliqué avant.", "Proposal awaiting approval by management — nothing is applied before then.")}
 
 
 @router.get("/skill-needs")
@@ -251,7 +252,7 @@ def candidate_from_email(
 ) -> dict:  # fmt: skip
     communication = db.get(Communication, communication_id)
     if communication is None or communication.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Message introuvable")
+        raise HTTPException(status_code=404, detail=tx("Message introuvable", "Message not found"))
     return _candidate_out(db, service.extract_candidate(db, event_bus, communication, llm))
 
 
@@ -259,9 +260,9 @@ def candidate_from_email(
 def update_candidate(candidate_id: uuid.UUID, payload: CandidateUpdate, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_PEOPLE))) -> dict:
     candidate = db.get(Candidate, candidate_id)
     if candidate is None or candidate.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Candidat introuvable")
+        raise HTTPException(status_code=404, detail=tx("Candidat introuvable", "Candidate not found"))
     if payload.status not in {"new", "shortlisted", "interview_proposed", "rejected", "hired"}:
-        raise HTTPException(status_code=400, detail="Statut inconnu")
+        raise HTTPException(status_code=400, detail=tx("Statut inconnu", "Unknown status"))
     candidate.status = payload.status
     db.commit()
     return _candidate_out(db, candidate)

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.core.entities import (
     PROCUREMENT_KINDS,
     SALES_KINDS,
@@ -30,7 +31,7 @@ from app.core.events.business_event import BusinessEvent
 from app.objects.graph import document_chain, document_parents
 from app.objects.links import create_link
 from app.transactions import posting
-from app.transactions.lifecycle import DERIVATIONS, KINDS, SYSTEM_STATUSES, allowed_transitions
+from app.transactions.lifecycle import DERIVATIONS, KINDS, SYSTEM_STATUSES, allowed_transitions, kind_label, status_label
 from app.transactions.margin import estimate_planned_unit_cost
 
 DOCUMENT_CREATED = "DocumentCreated"
@@ -129,7 +130,7 @@ def _resolve_customer(session: Session, company_id: uuid.UUID, data: DocumentInp
     if data.customer_id is not None:
         customer = session.get(Customer, data.customer_id)
         if customer is None or customer.company_id != company_id:
-            raise DocumentError("Client introuvable")
+            raise DocumentError(tx("Client introuvable", "Customer not found"))
         return customer.id
     if data.new_customer is not None and data.new_customer.name.strip():
         name = data.new_customer.name.strip()
@@ -151,7 +152,7 @@ def resolve_or_create_product(session: Session, company_id: uuid.UUID, new_produ
 
     name = new_product.name.strip()
     if not name:
-        raise DocumentError("Le nom du produit est obligatoire")
+        raise DocumentError(tx("Le nom du produit est obligatoire", "The product name is required"))
     query = session.query(Product).filter(Product.company_id == company_id)
     if new_product.sku:
         by_sku = query.filter(Product.sku == new_product.sku.strip()).first()
@@ -197,7 +198,7 @@ def _build_line(session: Session, company_id: uuid.UUID, doc: CommercialDocument
     if line.product_id is not None:
         product = session.get(Product, line.product_id)
         if product is None or product.company_id != company_id:
-            raise DocumentError("Produit introuvable")
+            raise DocumentError(tx("Produit introuvable", "Product not found"))
     elif line.new_product is not None:
         product = resolve_or_create_product(session, company_id, line.new_product)
 
@@ -256,9 +257,9 @@ def _build_line(session: Session, company_id: uuid.UUID, doc: CommercialDocument
 def _check_parties(kind: DocumentKind, customer_id, supplier_id) -> None:
     spec = KINDS[kind]
     if spec.party == "customer" and customer_id is None:
-        raise DocumentError(f"Un(e) {spec.label.lower()} doit être rattaché(e) à un client")
+        raise DocumentError(tx(f"Un(e) {spec.label.lower()} doit être rattaché(e) à un client", f"A {kind_label(kind).lower()} must be linked to a customer"))
     if kind in {DocumentKind.SUPPLIER_QUOTE, DocumentKind.PURCHASE_ORDER, DocumentKind.RECEPTION, DocumentKind.SUPPLIER_INVOICE} and supplier_id is None:
-        raise DocumentError(f"Un(e) {spec.label.lower()} doit être rattaché(e) à un fournisseur")
+        raise DocumentError(tx(f"Un(e) {spec.label.lower()} doit être rattaché(e) à un fournisseur", f"A {kind_label(kind).lower()} must be linked to a supplier"))
 
 
 # --- Create / derive -----------------------------------------------------------
@@ -269,7 +270,7 @@ def create_document(session: Session, event_bus: EventBus, company_id: uuid.UUID
     if data.supplier_id is not None:
         supplier = session.get(Supplier, data.supplier_id)
         if supplier is None or supplier.company_id != company_id:
-            raise DocumentError("Fournisseur introuvable")
+            raise DocumentError(tx("Fournisseur introuvable", "Supplier not found"))
     _check_parties(data.kind, customer_id, data.supplier_id)
 
     doc = CommercialDocument(
@@ -315,7 +316,7 @@ def derive_document(
     that lets anyone walk an order back to the request that started it."""
 
     if target_kind not in DERIVATIONS.get(source.kind, ()):
-        raise DocumentError(f"Impossible de créer un(e) {KINDS[target_kind].label.lower()} depuis un(e) {KINDS[source.kind].label.lower()}")
+        raise DocumentError(tx(f"Impossible de créer un(e) {KINDS[target_kind].label.lower()} depuis un(e) {KINDS[source.kind].label.lower()}", f"Cannot create a {kind_label(target_kind).lower()} from a {kind_label(source.kind).lower()}"))
 
     target_supplier = supplier_id or (source.supplier_id if target_kind in PROCUREMENT_KINDS else None)
     copy_prices_from_source = (
@@ -442,7 +443,7 @@ EDITABLE_FIELDS = {"title", "external_reference", "internal_reference", "due_at"
 def update_document(session: Session, doc: CommercialDocument, changes: dict) -> CommercialDocument:
     for key, value in changes.items():
         if key not in EDITABLE_FIELDS:
-            raise DocumentError(f"Champ non modifiable : {key}")
+            raise DocumentError(tx(f"Champ non modifiable : {key}", f"Field cannot be changed: {key}"))
         setattr(doc, key, value)
     session.commit()
     session.refresh(doc)
@@ -462,11 +463,11 @@ def update_line(session: Session, doc: CommercialDocument, line_id: uuid.UUID, c
     _ensure_editable(doc)
     line = next((ln for ln in doc.lines if ln.id == line_id), None)
     if line is None:
-        raise DocumentError("Ligne introuvable")
+        raise DocumentError(tx("Ligne introuvable", "Line not found"))
     allowed = {"description", "quantity", "unit_price", "price_basis", "lead_time_min_days", "lead_time_max_days", "lead_time_basis", "moq", "spq"}
     for key, value in changes.items():
         if key not in allowed:
-            raise DocumentError(f"Champ de ligne non modifiable : {key}")
+            raise DocumentError(tx(f"Champ de ligne non modifiable : {key}", f"Line field cannot be changed: {key}"))
         setattr(line, key, value)
     if "unit_price" in changes and "price_basis" not in changes and changes["unit_price"] is not None:
         # A human typing a price declares it; it is no longer "unknown".
@@ -480,7 +481,7 @@ def remove_line(session: Session, doc: CommercialDocument, line_id: uuid.UUID) -
     _ensure_editable(doc)
     line = next((ln for ln in doc.lines if ln.id == line_id), None)
     if line is None:
-        raise DocumentError("Ligne introuvable")
+        raise DocumentError(tx("Ligne introuvable", "Line not found"))
     doc.lines.remove(line)
     session.commit()
 
@@ -500,9 +501,9 @@ def add_cost_item(
 ) -> CostItem:
     amount_max = amount_min if amount_max is None else amount_max
     if amount_max < amount_min:
-        raise DocumentError("Le montant maximum doit être supérieur ou égal au minimum")
+        raise DocumentError(tx("Le montant maximum doit être supérieur ou égal au minimum", "The maximum amount must be greater than or equal to the minimum"))
     if basis == ValueBasis.OBSERVED and amount_max != amount_min:
-        raise DocumentError("Un coût observé est un montant exact, pas une fourchette")
+        raise DocumentError(tx("Un coût observé est un montant exact, pas une fourchette", "An observed cost is an exact amount, not a range"))
     item = CostItem(
         company_id=doc.company_id, document_id=doc.id, line_id=line_id, kind=kind, label=label,
         amount_min=amount_min, amount_max=amount_max, basis=basis, confidence=confidence, reference=reference,
@@ -535,7 +536,7 @@ def is_editable(doc: CommercialDocument) -> bool:
 
 def _ensure_editable(doc: CommercialDocument) -> None:
     if not is_editable(doc):
-        raise DocumentError("Ce document n'est plus modifiable dans son état actuel")
+        raise DocumentError(tx("Ce document n'est plus modifiable dans son état actuel", "This document can no longer be edited in its current state"))
 
 
 # --- Lifecycle -----------------------------------------------------------------
@@ -549,9 +550,9 @@ def change_status(
     and are never set by a plain status change."""
 
     if new_status not in allowed_transitions(doc.kind, doc.status):
-        raise DocumentError(f"Transition impossible : {doc.status} → {new_status}")
+        raise DocumentError(tx(f"Transition impossible : {doc.status} → {new_status}", f"Transition not allowed: {status_label(doc.kind, doc.status)} → {status_label(doc.kind, new_status)}"))
     if not system and new_status in SYSTEM_STATUSES.get(doc.kind, frozenset()):
-        raise DocumentError("Ce statut découle d'un fait enregistré (paiement, validation ou imputation) : utilisez l'action correspondante")
+        raise DocumentError(tx("Ce statut découle d'un fait enregistré (paiement, validation ou imputation) : utilisez l'action correspondante", "This status follows from a recorded fact (payment, validation or application): use the corresponding action"))
     old_status = doc.status
     doc.status = new_status
     now = occurred_at or _now()

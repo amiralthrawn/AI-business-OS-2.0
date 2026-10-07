@@ -19,6 +19,7 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, money, tx
 from app.config import get_settings
 from app.core.entities import (
     AIRun,
@@ -82,6 +83,21 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Steps of a run are stored as written (French); rendered on read (app.sourcing.router.run_out).
+STEP_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^Besoin analysé : (?P<a>.+)$"), "Need analysed: {a}"),
+    (re.compile(r"^Fournisseurs internes non consultés recherchés$"), "Searched internal suppliers not yet consulted"),
+    (re.compile(r"^(?P<a>\d+) trouvé\(s\)$"), "{a} found"),
+    (re.compile(r"^Recherche web$"), "Web search"),
+    (re.compile(r"^Aucun moteur de recherche configuré \(BRAVE_SEARCH_API_KEY\) — résultats internes uniquement\.$"), "No search engine configured (BRAVE_SEARCH_API_KEY) — internal results only."),
+    (re.compile(r"^Recherche web : « (?P<a>.+) »$"), 'Web search: "{a}"'),
+    (re.compile(r"^(?P<a>\d+) résultat\(s\)$"), "{a} result(s)"),
+    (re.compile(r"^Échec : (?P<a>.+)$"), "Failed: {a}"),
+    (re.compile(r"^Résultats structurés$"), "Structured results"),
+    (re.compile(r"^Prix retenu seulement s'il figure dans le texte de la source ; sinon « inconnu »\.$"), 'Price kept only if it appears in the source text; otherwise "unknown".'),
+]
+
+
 def _step(run: AIRun, label: str, status: str = "done", detail: str | None = None) -> None:
     run.steps = [*run.steps, {"label": label, "status": status, "detail": detail, "at": _now().isoformat()}]
 
@@ -92,10 +108,10 @@ def _domain(url: str) -> str:
 
 def run_sourcing(session: Session, event_bus: EventBus | None, purchase_request: CommercialDocument, web: WebSearchProvider | None = None) -> AIRun:
     if purchase_request.kind != DocumentKind.PURCHASE_REQUEST:
-        raise SourcingError("Le sourcing part d'une demande d'achat")
+        raise SourcingError(tx("Le sourcing part d'une demande d'achat", "Sourcing starts from a purchase request"))
     line = next((ln for ln in purchase_request.lines if ln.product_id), None)
     if line is None:
-        raise SourcingError("La demande d'achat n'a aucun produit à sourcer")
+        raise SourcingError(tx("La demande d'achat n'a aucun produit à sourcer", "The purchase request has no product to source"))
     product = session.get(Product, line.product_id)
     web = web if web is not None else default_web_provider()
 
@@ -123,7 +139,7 @@ def run_sourcing(session: Session, event_bus: EventBus | None, purchase_request:
             SourcingLead(
                 company_id=purchase_request.company_id, purchase_request_id=purchase_request.id, product_id=product.id,
                 name=supplier.name, country=supplier.country, source_kind="existing_supplier", supplier_id=supplier.id,
-                snippet="Fournisseur déjà référencé par l'entreprise, jamais consulté pour ce produit.",
+                snippet=tx("Fournisseur déjà référencé par l'entreprise, jamais consulté pour ce produit.", "Supplier already listed by the company, never consulted for this product."),
                 price_basis=ValueBasis.UNKNOWN, facts={"certifications": supplier.certifications or []}, retrieved_at=_now(),
             )
         )  # fmt: skip
@@ -181,9 +197,16 @@ def _flag_price_opportunity(session: Session, event_bus: EventBus | None, pr: Co
     best = min(prices)
     for lead in session.query(SourcingLead).filter_by(purchase_request_id=pr.id).filter(SourcingLead.found_price.isnot(None)).all():
         if lead.found_price <= best * 0.9:
-            title = f"Source moins chère possible pour {product.name} : {lead.name}"
+            title = f"Source moins chère possible pour {product.name} : {lead.name}"  # French column, also the de-duplication key
             if session.query(Opportunity.id).filter_by(company_id=pr.company_id, title=title).first() is None:
-                session.add(Opportunity(company_id=pr.company_id, title=title, description=f"Prix annoncé par la source : {lead.found_price:.2f} € (non vérifié) vs meilleur prix connu {best:.2f} €. Source : {lead.source_url}", status=OpportunityStatus.OPEN, related_entity_type=RelatedEntityType.PRODUCT, related_entity_id=product.id))
+                texts = both(lambda: {
+                    "title": tx(title, f"Possible cheaper source for {product.name}: {lead.name}"),
+                    "description": tx(
+                        f"Prix annoncé par la source : {money(lead.found_price)} (non vérifié) vs meilleur prix connu {money(best)}. Source : {lead.source_url}",
+                        f"Price stated by the source: {money(lead.found_price)} (unverified) vs best known price {money(best)}. Source: {lead.source_url}",
+                    ),
+                })  # fmt: skip
+                session.add(Opportunity(company_id=pr.company_id, title=title, description=texts["fr"]["description"], i18n=texts, status=OpportunityStatus.OPEN, related_entity_type=RelatedEntityType.PRODUCT, related_entity_id=product.id))
                 session.commit()
                 if event_bus is not None:
                     event_bus.publish(BusinessEvent(event_type=SOURCING_OPPORTUNITY_FOUND, source="sourcing", payload={"product_id": str(product.id), "lead": lead.name, "title": title}))
@@ -197,7 +220,7 @@ def convert_lead(session: Session, event_bus: EventBus, lead: SourcingLead, *, o
     from app.transactions.service import derive_document
 
     if lead.status == "converted":
-        raise SourcingError("Piste déjà convertie")
+        raise SourcingError(tx("Piste déjà convertie", "Lead already converted"))
     supplier = session.get(Supplier, lead.supplier_id) if lead.supplier_id else None
     if supplier is None:
         supplier = session.query(Supplier).filter(Supplier.company_id == lead.company_id, Supplier.name.ilike(lead.name)).first()

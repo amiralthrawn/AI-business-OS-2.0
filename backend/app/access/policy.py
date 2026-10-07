@@ -12,6 +12,7 @@ touching them. `view:*` = what a user sees (navigation + read APIs),
 
 from dataclasses import dataclass
 
+from app.core.i18n import tx
 from app.core.entities.user import Role
 
 # --- Visibility (navigation + read APIs of a workspace) ---
@@ -102,53 +103,65 @@ _APPROVAL_DOMAINS: dict[Role, frozenset[str]] = {
     Role.PROCUREMENT: frozenset({"procurement", "operations"}),
 }
 
-ROLE_LABELS_FR: dict[Role, str] = {
-    Role.DIRECTOR: "Direction",
-    Role.SALES: "Commercial",
-    Role.PROCUREMENT: "Achats",
-    Role.OPERATIONS: "Opérations",
-    Role.HR: "RH",
-    Role.EMPLOYEE: "Employé",
+_ROLE_LABELS: dict[Role, tuple[str, str]] = {  # (French, English)
+    Role.DIRECTOR: ("Direction", "Management"),
+    Role.SALES: ("Commercial", "Sales"),
+    Role.PROCUREMENT: ("Achats", "Procurement"),
+    Role.OPERATIONS: ("Opérations", "Operations"),
+    Role.HR: ("RH", "HR"),
+    Role.EMPLOYEE: ("Employé", "Employee"),
 }
+
+
+def role_label(role: Role) -> str:
+    return tx(*_ROLE_LABELS[role])
 
 
 @dataclass(frozen=True)
 class AccessItem:
     permission: str
-    label: str
-    group: str  # "Espaces" | "Données sensibles" | "Modification" | "Actions"
+    labels: tuple[str, str]  # (French, English)
+    groups: tuple[str, str]  # ("Espaces" | "Données sensibles" | "Modification" | "Actions", English)
     sensitive: bool = False
+
+    @property
+    def label(self) -> str:
+        return tx(*self.labels)
+
+    @property
+    def group(self) -> str:
+        return tx(*self.groups)
 
 
 # What a director can tick / untick per profile, in the navigation's own
 # vocabulary (brain/permissions.md). Every permission appears exactly once.
 ACCESS_CATALOG: tuple[AccessItem, ...] = (
-    AccessItem(VIEW_SALES, "Ventes (affaires, devis, commandes, clients)", "Espaces"),
-    AccessItem(VIEW_PROCUREMENT, "Achats (demandes, fournisseurs, sourcing)", "Espaces"),
-    AccessItem(VIEW_CATALOG, "Catalogue & stock", "Espaces"),
-    AccessItem(VIEW_COMMUNICATIONS, "Communications (emails, site web, campagnes)", "Espaces"),
-    AccessItem(VIEW_PEOPLE, "Équipe (employés, recrutement)", "Espaces"),
-    AccessItem(VIEW_FINANCE, "Finance (marges, écritures)", "Espaces"),
-    AccessItem(VIEW_INTELLIGENCE, "Intelligence (risques, opportunités, décisions)", "Espaces"),
-    AccessItem(VIEW_ACTIONS, "Actions & validations", "Espaces"),
-    AccessItem(VIEW_COMPLIANCE, "Conformité & juridique", "Espaces"),
-    AccessItem(VIEW_SETTINGS, "Configuration", "Espaces"),
-    AccessItem(VIEW_EMPLOYEE_COSTS, "Rémunérations & coût des employés", "Données sensibles", True),
-    AccessItem(VIEW_TREASURY, "Trésorerie & comptes bancaires", "Données sensibles", True),
-    AccessItem(VIEW_OWNERSHIP, "Capital & valorisation", "Données sensibles", True),
-    AccessItem(WRITE_SALES, "Modifier les ventes", "Modification"),
-    AccessItem(WRITE_PROCUREMENT, "Modifier les achats", "Modification"),
-    AccessItem(WRITE_OPERATIONS, "Réceptions & livraisons", "Modification"),
-    AccessItem(WRITE_FINANCE, "Factures", "Modification"),
-    AccessItem(WRITE_CATALOG, "Produits & stock", "Modification"),
-    AccessItem(WRITE_COMMUNICATIONS, "Préparer emails & propositions site", "Modification"),
-    AccessItem(WRITE_PEOPLE, "Employés & candidats", "Modification"),
-    AccessItem(WRITE_TREASURY, "Comptes, flux & capital", "Modification", True),
-    AccessItem(WRITE_COMPLIANCE, "Demandes de conformité", "Modification"),
-    AccessItem(WRITE_SETTINGS, "Configuration & gestion des accès", "Modification", True),
-    AccessItem(ACTION_SUBMIT_EMAIL, "Soumettre un email à validation", "Actions"),
-    AccessItem(ACTION_APPROVE, "Valider des actions (de son domaine)", "Actions"),
-    AccessItem(ACTION_ASK_AI, "Demander à l'IA", "Actions"),
+    AccessItem(VIEW_SALES, ("Ventes (affaires, devis, commandes, clients)", "Sales (deals, quotes, orders, customers)"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_PROCUREMENT, ("Achats (demandes, fournisseurs, sourcing)", "Procurement (requests, suppliers, sourcing)"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_CATALOG, ("Catalogue & stock", "Catalog & stock"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_COMMUNICATIONS, ("Communications (emails, site web, campagnes)", "Communications (emails, website, campaigns)"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_PEOPLE, ("Équipe (employés, recrutement)", "Team (employees, recruitment)"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_FINANCE, ("Finance (marges, écritures)", "Finance (margins, entries)"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_INTELLIGENCE, ("Intelligence (risques, opportunités, décisions)", "Intelligence (risks, opportunities, decisions)"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_ACTIONS, ("Actions & validations", "Actions & approvals"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_COMPLIANCE, ("Conformité & juridique", "Compliance & legal"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_SETTINGS, ("Configuration", "Settings"), ("Espaces", "Workspaces")),
+    AccessItem(VIEW_EMPLOYEE_COSTS, ("Rémunérations & coût des employés", "Compensation & employee cost"), ("Données sensibles", "Sensitive data"), True),
+    AccessItem(VIEW_TREASURY, ("Trésorerie & comptes bancaires", "Cash & bank accounts"), ("Données sensibles", "Sensitive data"), True),
+    AccessItem(VIEW_OWNERSHIP, ("Capital & valorisation", "Equity & valuation"), ("Données sensibles", "Sensitive data"), True),
+    AccessItem(WRITE_SALES, ("Modifier les ventes", "Edit sales"), ("Modification", "Editing")),
+    AccessItem(WRITE_PROCUREMENT, ("Modifier les achats", "Edit procurement"), ("Modification", "Editing")),
+    AccessItem(WRITE_OPERATIONS, ("Réceptions & livraisons", "Goods receipts & deliveries"), ("Modification", "Editing")),
+    AccessItem(WRITE_FINANCE, ("Factures", "Invoices"), ("Modification", "Editing")),
+    AccessItem(WRITE_CATALOG, ("Produits & stock", "Products & stock"), ("Modification", "Editing")),
+    AccessItem(WRITE_COMMUNICATIONS, ("Préparer emails & propositions site", "Prepare emails & website proposals"), ("Modification", "Editing")),
+    AccessItem(WRITE_PEOPLE, ("Employés & candidats", "Employees & candidates"), ("Modification", "Editing")),
+    AccessItem(WRITE_TREASURY, ("Comptes, flux & capital", "Accounts, flows & equity"), ("Modification", "Editing"), True),
+    AccessItem(WRITE_COMPLIANCE, ("Demandes de conformité", "Compliance requests"), ("Modification", "Editing")),
+    AccessItem(WRITE_SETTINGS, ("Configuration & gestion des accès", "Settings & access management"), ("Modification", "Editing"), True),
+    AccessItem(ACTION_SUBMIT_EMAIL, ("Soumettre un email à validation", "Submit an email for approval"), ("Actions", "Actions")),
+    AccessItem(ACTION_APPROVE, ("Valider des actions (de son domaine)", "Approve actions (in one's own area)"), ("Actions", "Actions")),
+    AccessItem(ACTION_ASK_AI, ("Demander à l'IA", "Ask AI"), ("Actions", "Actions")),
 )
 
 

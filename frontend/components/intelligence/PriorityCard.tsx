@@ -3,6 +3,7 @@ import ReasoningTrail from "@/components/intelligence/ReasoningTrail";
 import Badge, { type BadgeTone } from "@/components/ui/Badge";
 import Card from "@/components/ui/Card";
 import type { IntelligenceSignal } from "@/lib/types";
+import { valueLabel } from "@/lib/labels";
 
 function impactTone(impact: string): BadgeTone {
   if (impact === "high") return "danger";
@@ -10,15 +11,7 @@ function impactTone(impact: string): BadgeTone {
   return "success";
 }
 
-const KIND_LABEL: Record<string, string> = {
-  risk: "Risque",
-  opportunity: "Opportunité",
-  decision: "Décision",
-  interpretation: "Interprétation",
-  observation: "Observation",
-};
 
-const CONFIDENCE_LABEL: Record<string, string> = { low: "faible", medium: "moyenne", high: "élevée" };
 
 function kindIcon(kind: string) {
   if (kind === "risk") {
@@ -63,8 +56,8 @@ export default function PriorityCard({ signal }: { signal: IntelligenceSignal })
   const href = detailHref(signal);
   const tone = impactTone(signal.impact);
   const label = signal.interpretation_type
-    ? KIND_LABEL[signal.interpretation_type] ?? signal.interpretation_type
-    : KIND_LABEL[signal.kind] ?? signal.kind;
+    ? valueLabel("signal", signal.interpretation_type)
+    : valueLabel("signal", signal.kind);
 
   const body = (
     <div className="flex items-start gap-4">
@@ -85,7 +78,7 @@ export default function PriorityCard({ signal }: { signal: IntelligenceSignal })
         )}
         <div className="mt-3 flex items-center justify-between">
           <ReasoningTrail kind={signal.kind} />
-          <span className="text-[11.5px] text-text-faint">confiance {CONFIDENCE_LABEL[signal.confidence] ?? signal.confidence}</span>
+          <span className="text-[11.5px] text-text-faint">confiance {valueLabel("confidence", signal.confidence)}</span>
         </div>
       </div>
     </div>

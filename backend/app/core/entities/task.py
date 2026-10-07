@@ -30,6 +30,9 @@ class Task(Base, IdMixin, TimestampMixin, LinkableMixin):
     # Traces which Business Event (Event Log entry) produced this task, for audit.
     # Not a foreign key: the polymorphic event source isn't a single target table.
     source_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    # Generated text in both interface languages, {"fr": {"title", "description"}, "en": {...}}
+    # (app.core.i18n, brain/decisions.md #58); None for a text a person wrote.
+    i18n: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Human-in-the-loop fields (step 11). A Task proposed by the AI layer is
     # the SAME row throughout its lifecycle -- there is no separate

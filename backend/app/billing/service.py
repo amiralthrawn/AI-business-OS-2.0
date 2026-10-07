@@ -20,12 +20,14 @@ references attached to the operations for traceability -- NOT a ledger
 (see brain/billing.md "À confirmer avec le comptable").
 """
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, colon, money, tx
 from app.actions.service import ActionsService
 from app.core.analytics import _as_aware_utc
 from app.core.entities import (
@@ -78,12 +80,12 @@ PENDING_CREDIT_STATUSES = {
 # Suggested account references, shown as EXAMPLES until the company's
 # accountant confirms a chart (finance_settings["accounting_refs"]). Never
 # applied by default.
-ACCOUNTING_REF_EXAMPLES = {
-    "customer_receivable": ("411", "Clients"),
-    "supplier_payable": ("401", "Fournisseurs"),
-    "bank": ("512", "Banque"),
-    "purchases": ("601", "Achats"),
-    "sales": ("706", "Ventes"),
+ACCOUNTING_REF_EXAMPLES = {  # account, (French label, English label)
+    "customer_receivable": ("411", ("Clients", "Customers")),
+    "supplier_payable": ("401", ("Fournisseurs", "Suppliers")),
+    "bank": ("512", ("Banque", "Bank")),
+    "purchases": ("601", ("Achats", "Purchases")),
+    "sales": ("706", ("Ventes", "Sales")),
 }
 
 
@@ -108,9 +110,26 @@ def doc_total(doc: CommercialDocument) -> float | None:
 
 
 def _eur(amount: float) -> str:
-    """French amount for messages shown as-is: 4 000,00 €."""
+    """Amount for messages shown as-is, in the active language."""
 
-    return f"{amount:,.2f}".replace(",", "\u202f").replace(".", ",") + " €"
+    return money(amount)
+
+
+_STORED_LABELS = (
+    # Labels this module writes on payments and instalments (French, stored),
+    # shown in the active language. Any other label was typed by a person.
+    (re.compile(r"^Règlement (?P<x>.+)$"), lambda m: tx(f"Règlement {m['x']}", f"Payment {m['x']}")),
+    (re.compile(r"^Paiement à rapprocher$"), lambda m: tx("Paiement à rapprocher", "Payment to reconcile")),
+    (re.compile(r"^Échéance (?P<i>\d+)/(?P<n>\d+)$"), lambda m: tx(f"Échéance {m['i']}/{m['n']}", f"Instalment {m['i']}/{m['n']}")),
+)
+
+
+def display_label(label: str | None) -> str | None:
+    for pattern, render in _STORED_LABELS:
+        m = pattern.match(label or "")
+        if m:
+            return render(m)
+    return label
 
 
 def _is_customer_side(doc: CommercialDocument) -> bool:
@@ -154,9 +173,9 @@ def accounting_refs(session: Session, company_id: uuid.UUID) -> dict:
     configured = dict((ctx.finance_settings or {}).get("accounting_refs") or {}) if ctx else {}
     return {
         "configured": configured,
-        "examples": {k: {"account": a, "label": label} for k, (a, label) in ACCOUNTING_REF_EXAMPLES.items()},
+        "examples": {k: {"account": a, "label": tx(*label)} for k, (a, label) in ACCOUNTING_REF_EXAMPLES.items()},
         "status": "configured" if configured else "to_confirm",
-        "note": "Références indicatives pour la traçabilité, à confirmer avec le comptable. Aucune écriture comptable n'est générée.",
+        "note": tx("Références indicatives pour la traçabilité, à confirmer avec le comptable. Aucune écriture comptable n'est générée.", "Indicative references for traceability, to be confirmed with the accountant. No accounting entry is generated."),
     }
 
 
@@ -183,7 +202,7 @@ def credits_on(session: Session, invoice: CommercialDocument) -> list[CreditAppl
 def _schedule(session: Session, invoice: CommercialDocument, total: float) -> list[dict]:
     rows = session.query(PaymentInstallment).filter_by(document_id=invoice.id).order_by(PaymentInstallment.sequence).all()
     if rows:
-        return [{"id": r.id, "sequence": r.sequence, "label": r.label, "due_at": _aware(r.due_at), "amount": r.amount, "stored": True} for r in rows]
+        return [{"id": r.id, "sequence": r.sequence, "label": display_label(r.label), "due_at": _aware(r.due_at), "amount": r.amount, "stored": True} for r in rows]
     due = _aware(invoice.due_at) or _aware(invoice.issued_at) or _aware(invoice.created_at)
     return [{"id": None, "sequence": 1, "label": "Paiement unique", "due_at": due, "amount": total, "stored": False}]
 
@@ -194,14 +213,14 @@ def settlement(session: Session, invoice: CommercialDocument, now: datetime | No
     allocated to instalments in due-date order), and what is late."""
 
     if invoice.kind not in INVOICE_KINDS:
-        raise BillingError("Seule une facture a un règlement")
+        raise BillingError(tx("Seule une facture a un règlement", "Only an invoice has a settlement"))
     now = now or _now()
     total = doc_total(invoice)
     base = {"invoice_id": invoice.id, "number": invoice.number, "status": invoice.status, "status_label": status_label(invoice.kind, invoice.status)}
     if total is None:
-        return base | {"available": False, "reason": "Montant incomplet : une ligne n'a pas de prix."}
+        return base | {"available": False, "reason": tx("Montant incomplet : une ligne n'a pas de prix.", "Incomplete amount: a line has no price.")}
     if invoice.status not in OPEN_INVOICE_STATUSES[invoice.kind]:
-        return base | {"available": False, "total": total, "reason": "Facture non émise : aucun montant n'est encore dû." if invoice.status == "draft" else "Facture annulée."}
+        return base | {"available": False, "total": total, "reason": tx("Facture non émise : aucun montant n'est encore dû.", "Invoice not issued: nothing is due yet.") if invoice.status == "draft" else tx("Facture annulée.", "Invoice cancelled.")}
 
     payments = payments_on(session, invoice)
     credits = credits_on(session, invoice)
@@ -230,11 +249,11 @@ def settlement(session: Session, invoice: CommercialDocument, now: datetime | No
     overdue = [i for i in installments if i["state"] == "overdue"]
     upcoming = [i for i in installments if i["state"] in {"due", "partial", "overdue"}]
     if remaining <= TOLERANCE:
-        state, label = "paid", "Réglée"
+        state, label = "paid", tx("Réglée", "Paid")
     elif settled > TOLERANCE:
-        state, label = "partially_paid", "Partiellement réglée"
+        state, label = "partially_paid", tx("Partiellement réglée", "Partially paid")
     else:
-        state, label = "unpaid", "Non réglée"
+        state, label = "unpaid", tx("Non réglée", "Unpaid")
     return base | {
         "available": True,
         "total": total,
@@ -251,7 +270,7 @@ def settlement(session: Session, invoice: CommercialDocument, now: datetime | No
         "schedule_is_default": not any(i["stored"] for i in installments),
         "next_due": upcoming[0] if upcoming else None,
         "payments": [
-            {"id": p.id, "amount": p.amount, "occurred_at": p.occurred_at, "label": p.label, "source": p.source, "simulated": _is_simulated(p.source)} for p in payments
+            {"id": p.id, "amount": p.amount, "occurred_at": p.occurred_at, "label": display_label(p.label), "source": p.source, "simulated": _is_simulated(p.source)} for p in payments
         ],
         "credits": [
             {"credit_note_id": c.credit_note_id, "number": _number(session, c.credit_note_id), "amount": c.applied_amount, "applied_at": c.applied_at} for c in credits
@@ -265,7 +284,7 @@ def _number(session: Session, doc_id: uuid.UUID | None) -> str | None:
 
 
 def sync_invoice_status(session: Session, event_bus: EventBus, invoice: CommercialDocument) -> None:
-    """Moves the invoice to "Partiellement réglée" / "Réglée" when (and only
+    """Moves the invoice to tx("Partiellement réglée", "Partially paid") / tx("Réglée", "Paid") when (and only
     when) recorded payments and imputed credit notes say so."""
 
     from app.transactions.lifecycle import allowed_transitions
@@ -281,9 +300,9 @@ def sync_invoice_status(session: Session, event_bus: EventBus, invoice: Commerci
 
 def _check_payable(invoice: CommercialDocument) -> None:
     if invoice.kind == K.CUSTOMER_INVOICE and invoice.status not in {"issued", "partially_paid"}:
-        raise BillingError("Un paiement s'enregistre sur une facture émise et non soldée")
+        raise BillingError(tx("Un paiement s'enregistre sur une facture émise et non soldée", "A payment is recorded on an issued, unsettled invoice"))
     if invoice.kind == K.SUPPLIER_INVOICE and invoice.status not in {"approved", "partially_paid"}:
-        raise BillingError("Une facture fournisseur doit être validée avant d'enregistrer un règlement")
+        raise BillingError(tx("Une facture fournisseur doit être validée avant d'enregistrer un règlement", "A supplier invoice must be approved before a payment is recorded"))
 
 
 def record_payment(
@@ -305,26 +324,26 @@ def record_payment(
     supplier and left "à rapprocher" until allocated."""
 
     if amount is None or amount <= 0:
-        raise BillingError("Le montant doit être positif")
+        raise BillingError(tx("Le montant doit être positif", "The amount must be positive"))
     amount = round(float(amount), 2)
     if invoice is not None:
         if invoice.kind not in INVOICE_KINDS or invoice.company_id != company_id:
-            raise BillingError("Document de règlement invalide")
+            raise BillingError(tx("Document de règlement invalide", "Invalid settlement document"))
         _check_payable(invoice)
         remaining = settlement(session, invoice)["remaining"]
         if amount > remaining + TOLERANCE:
-            raise BillingError(f"Le montant dépasse le reste à payer ({_eur(remaining)}) : enregistrez l'excédent comme paiement à rapprocher")
+            raise BillingError(tx(f"Le montant dépasse le reste à payer ({_eur(remaining)}) : enregistrez l'excédent comme paiement à rapprocher", f"The amount exceeds the balance due ({_eur(remaining)}): record the excess as a payment to reconcile"))
         customer_id, supplier_id = invoice.customer_id, invoice.supplier_id
         category, direction = _payment_category(invoice), _payment_direction(invoice)
         party = session.get(Customer, customer_id) if customer_id else session.get(Supplier, supplier_id)
         default_label = f"Règlement {invoice.number}"
     else:
         if bool(customer_id) == bool(supplier_id):
-            raise BillingError("Un paiement non affecté doit être rattaché à un client ou à un fournisseur")
+            raise BillingError(tx("Un paiement non affecté doit être rattaché à un client ou à un fournisseur", "An unallocated payment must be linked to a customer or a supplier"))
         category, direction = ("customer_payment", "in") if customer_id else ("supplier_payment", "out")
         party = session.get(Customer, customer_id) if customer_id else session.get(Supplier, supplier_id)
         if party is None or party.company_id != company_id:
-            raise BillingError("Client ou fournisseur introuvable")
+            raise BillingError(tx("Client ou fournisseur introuvable", "Customer or supplier not found"))
         default_label = "Paiement à rapprocher"
     movement = CashMovement(
         company_id=company_id, account_id=account_id, direction=direction, amount=amount, status="actual",
@@ -344,15 +363,15 @@ def allocate_payment(session: Session, event_bus: EventBus, movement: CashMoveme
     """Reconciles an attributed-but-unallocated payment with an invoice of the same party."""
 
     if movement.status != "actual" or movement.document_id is not None:
-        raise BillingError("Ce paiement est déjà rapproché")
+        raise BillingError(tx("Ce paiement est déjà rapproché", "This payment is already reconciled"))
     if invoice.kind not in INVOICE_KINDS or movement.category != _payment_category(invoice):
-        raise BillingError("Ce paiement ne peut pas régler ce document")
+        raise BillingError(tx("Ce paiement ne peut pas régler ce document", "This payment cannot settle this document"))
     if (invoice.customer_id and movement.customer_id != invoice.customer_id) or (invoice.supplier_id and movement.supplier_id != invoice.supplier_id):
-        raise BillingError("Le paiement et la facture ne concernent pas le même tiers")
+        raise BillingError(tx("Le paiement et la facture ne concernent pas le même tiers", "The payment and the invoice do not concern the same party"))
     _check_payable(invoice)
     remaining = settlement(session, invoice)["remaining"]
     if movement.amount > remaining + TOLERANCE:
-        raise BillingError(f"Le paiement ({_eur(movement.amount)}) dépasse le reste à payer ({_eur(remaining)})")
+        raise BillingError(tx(f"Le paiement ({_eur(movement.amount)}) dépasse le reste à payer ({_eur(remaining)})", f"The payment ({_eur(movement.amount)}) exceeds the balance due ({_eur(remaining)})"))
     movement.document_id = invoice.id
     session.commit()
     _publish(event_bus, PAYMENT_ALLOCATED, invoice, {"movement_id": str(movement.id), "amount": movement.amount})
@@ -365,18 +384,18 @@ def set_installments(session: Session, event_bus: EventBus, invoice: CommercialD
     deposit + balance...) as long as they add up to the invoice total."""
 
     if invoice.kind not in INVOICE_KINDS:
-        raise BillingError("Un échéancier s'applique à une facture")
+        raise BillingError(tx("Un échéancier s'applique à une facture", "A payment schedule applies to an invoice"))
     if invoice.status in {"paid", "cancelled"}:
-        raise BillingError("Cette facture est soldée ou annulée")
+        raise BillingError(tx("Cette facture est soldée ou annulée", "This invoice is settled or cancelled"))
     total = doc_total(invoice)
     if total is None:
-        raise BillingError("Montant de la facture incomplet")
+        raise BillingError(tx("Montant de la facture incomplet", "Incomplete invoice amount"))
     if not items:
-        raise BillingError("Au moins une échéance est nécessaire")
+        raise BillingError(tx("Au moins une échéance est nécessaire", "At least one instalment is required"))
     if any((it.get("amount") or 0) <= 0 or it.get("due_at") is None for it in items):
-        raise BillingError("Chaque échéance a une date et un montant positif")
+        raise BillingError(tx("Chaque échéance a une date et un montant positif", "Each instalment needs a date and a positive amount"))
     if abs(round(sum(float(it["amount"]) for it in items), 2) - total) > 0.01:
-        raise BillingError(f"La somme des échéances doit être égale au montant de la facture ({_eur(total)})")
+        raise BillingError(tx(f"La somme des échéances doit être égale au montant de la facture ({_eur(total)})", f"The instalments must add up to the invoice amount ({_eur(total)})"))
     session.query(PaymentInstallment).filter_by(document_id=invoice.id).delete()
     rows = []
     for i, it in enumerate(sorted(items, key=lambda x: _aware(x["due_at"])), start=1):
@@ -434,22 +453,22 @@ def credit_view(session: Session, credit_note: CommercialDocument) -> dict:
     )
     if credit_note.kind == K.CUSTOMER_CREDIT_NOTE:
         effect = {
-            "draft": "Aucun effet sur le solde : l'avoir n'a pas encore été proposé au client.",
-            "submitted": "Aucun effet sur le solde : en attente de la réponse du client.",
-            "accepted": "Aucun effet sur le solde : accepté par le client, en attente de validation interne.",
-            "rejected": "Aucun effet : refusé par le client.",
-            "validated": "Validé : l'imputation au compte client reste à faire.",
-            "applied": "Imputé une fois au compte client.",
-            "refunded": "Imputé, puis l'excédent a été remboursé.",
-            "cancelled": "Aucun effet : annulé.",
+            "draft": tx("Aucun effet sur le solde : l'avoir n'a pas encore été proposé au client.", "No effect on the balance: the credit note has not been offered to the customer yet."),
+            "submitted": tx("Aucun effet sur le solde : en attente de la réponse du client.", "No effect on the balance: awaiting the customer's answer."),
+            "accepted": tx("Aucun effet sur le solde : accepté par le client, en attente de validation interne.", "No effect on the balance: accepted by the customer, awaiting internal validation."),
+            "rejected": tx("Aucun effet : refusé par le client.", "No effect: rejected by the customer."),
+            "validated": tx("Validé : l'imputation au compte client reste à faire.", "Validated: still to be applied to the customer account."),
+            "applied": tx("Imputé une fois au compte client.", "Applied once to the customer account."),
+            "refunded": tx("Imputé, puis l'excédent a été remboursé.", "Applied, then the excess was refunded."),
+            "cancelled": tx("Aucun effet : annulé.", "No effect: cancelled."),
         }.get(credit_note.status, "")
     else:
         effect = {
-            "requested": "Aucun effet : avoir demandé, en attente du fournisseur.",
-            "confirmed": "Confirmé par le fournisseur : l'imputation sur sa facture reste à faire.",
-            "rejected": "Aucun effet : refusé par le fournisseur.",
-            "applied": "Imputé une fois sur ce que nous devons au fournisseur.",
-            "cancelled": "Aucun effet : annulé.",
+            "requested": tx("Aucun effet : avoir demandé, en attente du fournisseur.", "No effect: credit note requested, awaiting the supplier."),
+            "confirmed": tx("Confirmé par le fournisseur : l'imputation sur sa facture reste à faire.", "Confirmed by the supplier: still to be applied to their invoice."),
+            "rejected": tx("Aucun effet : refusé par le fournisseur.", "No effect: rejected by the supplier."),
+            "applied": tx("Imputé une fois sur ce que nous devons au fournisseur.", "Applied once to what we owe the supplier."),
+            "cancelled": tx("Aucun effet : annulé.", "No effect: cancelled."),
         }.get(credit_note.status, "")
     return {
         "credit_note_id": credit_note.id,
@@ -475,7 +494,7 @@ def request_credit_validation(session: Session, event_bus: EventBus, credit_note
     alone never changes a balance."""
 
     if credit_note.kind != K.CUSTOMER_CREDIT_NOTE or credit_note.status != "accepted":
-        raise BillingError("Seul un avoir accepté par le client se soumet à la validation comptable")
+        raise BillingError(tx("Seul un avoir accepté par le client se soumet à la validation comptable", "Only a credit note accepted by the customer goes to accounting validation"))
     existing = (
         session.query(Task)
         .filter_by(related_entity_type=RelatedEntityType.COMMERCIAL_DOCUMENT, related_entity_id=credit_note.id, pending_action=VALIDATE_CREDIT_NOTE_ACTION, status=TaskStatus.PENDING_VALIDATION)
@@ -485,10 +504,19 @@ def request_credit_validation(session: Session, event_bus: EventBus, credit_note
         return existing
     total = doc_total(credit_note)
     customer = session.get(Customer, credit_note.customer_id) if credit_note.customer_id else None
+    texts = both(lambda: {
+        "title": tx(f"Valider l'avoir {credit_note.number}", f"Validate credit note {credit_note.number}")
+        + (f" — {customer.name}" if customer else "") + (f"{colon()} {money(total)}" if total is not None else ""),
+        "description": tx(
+            "Le client a accepté cet avoir. Une fois validé, il pourra être imputé sur son compte (réduction de sa facture, ou remboursement de l'excédent déjà payé).",
+            "The customer accepted this credit note. Once validated, it can be applied to their account (reducing their invoice, or refunding any overpayment).",
+        ),
+    })  # fmt: skip
     task = ActionsService(session, event_bus).propose_task(
         company_id=credit_note.company_id,
-        title=f"Valider l'avoir {credit_note.number}" + (f" — {customer.name}" if customer else "") + (f" : {_eur(total)}" if total is not None else ""),
-        description="Le client a accepté cet avoir. Une fois validé, il pourra être imputé sur son compte (réduction de sa facture, ou remboursement de l'excédent déjà payé).",
+        title=texts["fr"]["title"],
+        description=texts["fr"]["description"],
+        i18n=texts,
         related_entity_type=RelatedEntityType.COMMERCIAL_DOCUMENT,
         related_entity_id=credit_note.id,
         pending_action=VALIDATE_CREDIT_NOTE_ACTION,
@@ -509,9 +537,9 @@ def finalize_credit_validation(session: Session, event_bus: EventBus, task: Task
 
     credit_note = session.get(CommercialDocument, task.related_entity_id) if task.related_entity_id else None
     if credit_note is None or credit_note.kind != K.CUSTOMER_CREDIT_NOTE:
-        raise BillingError("Avoir introuvable")
+        raise BillingError(tx("Avoir introuvable", "Credit note not found"))
     if credit_note.status != "accepted":
-        raise BillingError("L'avoir n'est plus en attente de validation")
+        raise BillingError(tx("L'avoir n'est plus en attente de validation", "The credit note is no longer awaiting validation"))
     change_status(session, event_bus, credit_note, "validated", system=True)
     task.status = TaskStatus.EXECUTED
     session.commit()
@@ -528,16 +556,16 @@ def apply_credit_note(session: Session, event_bus: EventBus, credit_note: Commer
     from app.transactions.service import change_status
 
     if credit_note.kind == K.CUSTOMER_CREDIT_NOTE and credit_note.status != "validated":
-        raise BillingError("Un avoir client s'impute après acceptation du client ET validation interne")
+        raise BillingError(tx("Un avoir client s'impute après acceptation du client ET validation interne", "A customer credit note is applied after customer acceptance AND internal validation"))
     if credit_note.kind == K.SUPPLIER_CREDIT_NOTE and credit_note.status != "confirmed":
-        raise BillingError("Un avoir fournisseur s'impute une fois confirmé par le fournisseur")
+        raise BillingError(tx("Un avoir fournisseur s'impute une fois confirmé par le fournisseur", "A supplier credit note is applied once confirmed by the supplier"))
     if credit_note.kind not in CREDIT_KINDS:
-        raise BillingError("Ce document n'est pas un avoir")
+        raise BillingError(tx("Ce document n'est pas un avoir", "This document is not a credit note"))
     if credit_application(session, credit_note) is not None:
-        raise BillingError("Cet avoir a déjà été imputé")
+        raise BillingError(tx("Cet avoir a déjà été imputé", "This credit note has already been applied"))
     total = doc_total(credit_note)
     if total is None or total <= 0:
-        raise BillingError("Montant de l'avoir incomplet")
+        raise BillingError(tx("Montant de l'avoir incomplet", "Incomplete credit note amount"))
     invoice = target_invoice(session, credit_note)
     if invoice is not None:
         # Reduces what is still owed on the invoice; anything above it was
@@ -565,7 +593,7 @@ def record_refund(session: Session, event_bus: EventBus, credit_note: Commercial
 
     view = credit_view(session, credit_note)
     if not view["can_refund"]:
-        raise BillingError("Aucun remboursement n'est dû sur cet avoir")
+        raise BillingError(tx("Aucun remboursement n'est dû sur cet avoir", "No refund is due on this credit note"))
     customer = session.get(Customer, credit_note.customer_id) if credit_note.customer_id else None
     movement = CashMovement(
         company_id=credit_note.company_id, account_id=account_id, direction="out", amount=view["refund_due"], status="actual",
@@ -590,10 +618,21 @@ def on_document_status_changed(session: Session, event_bus: EventBus, doc: Comme
     elif doc.kind == K.CUSTOMER_CREDIT_NOTE and doc.status == "rejected":
         _publish(event_bus, CREDIT_NOTE_REJECTED, doc, {"amount": doc_total(doc)})
         customer = session.get(Customer, doc.customer_id) if doc.customer_id else None
+        texts = both(lambda: {
+            "title": tx(
+                f"Avoir {doc.number} refusé" + (f" par {customer.name}" if customer else "") + " : décider de la suite",
+                f"Credit note {doc.number} rejected" + (f" by {customer.name}" if customer else "") + ": decide what to do next",
+            ),
+            "description": tx(
+                "Le client a refusé l'avoir proposé. Options : proposer un autre montant, un remplacement, ou clore la réclamation.",
+                "The customer rejected the proposed credit note. Options: offer another amount, a replacement, or close the claim.",
+            ),
+        })  # fmt: skip
         ActionsService(session, event_bus).create_manual_task(
             company_id=doc.company_id,
-            title=f"Avoir {doc.number} refusé" + (f" par {customer.name}" if customer else "") + " : décider de la suite",
-            description="Le client a refusé l'avoir proposé. Options : proposer un autre montant, un remplacement, ou clore la réclamation.",
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             domain="sales",
             requires_decision=True,
             related_entity_type=RelatedEntityType.COMMERCIAL_DOCUMENT,
@@ -624,7 +663,7 @@ def fulfilment(session: Session, order: CommercialDocument, now: datetime | None
     received without the corresponding document status."""
 
     if order.kind not in _PHYSICAL:
-        raise BillingError("Le suivi de livraison concerne une commande")
+        raise BillingError(tx("Le suivi de livraison concerne une commande", "Delivery tracking applies to an order"))
     now = now or _now()
     physical_kind = _PHYSICAL[order.kind]
     done_status = "delivered" if physical_kind == K.CUSTOMER_DELIVERY else "received"
@@ -661,15 +700,15 @@ def fulfilment(session: Session, order: CommercialDocument, now: datetime | None
     done = sum(min(r["done"], r["ordered"]) for r in lines.values())
     in_transit = sum(r["in_transit"] for r in lines.values())
     if not shipments:
-        state, label = "not_started", "Aucune livraison enregistrée" if physical_kind == K.CUSTOMER_DELIVERY else "Aucune réception enregistrée"
+        state, label = "not_started", tx("Aucune livraison enregistrée", "No delivery recorded") if physical_kind == K.CUSTOMER_DELIVERY else tx("Aucune réception enregistrée", "No goods receipt recorded")
     elif ordered and done >= ordered - 1e-9:
-        state, label = "complete", "Livrée en totalité" if physical_kind == K.CUSTOMER_DELIVERY else "Reçue en totalité"
+        state, label = "complete", tx("Livrée en totalité", "Fully delivered") if physical_kind == K.CUSTOMER_DELIVERY else tx("Reçue en totalité", "Fully received")
     elif done > 0:
-        state, label = "partial", "Livraison partielle" if physical_kind == K.CUSTOMER_DELIVERY else "Réception partielle"
+        state, label = "partial", "Livraison partielle" if physical_kind == K.CUSTOMER_DELIVERY else tx("Réception partielle", "Partially received")
     elif in_transit > 0:
-        state, label = "in_transit", "Expédiée, en transit"
+        state, label = "in_transit", tx("Expédiée, en transit", "Shipped, in transit")
     else:
-        state, label = "planned", "Planifiée" if physical_kind == K.CUSTOMER_DELIVERY else "Attendue"
+        state, label = "planned", tx("Planifiée", "Planned") if physical_kind == K.CUSTOMER_DELIVERY else "Attendue"
     promised = _aware(order.due_at)
     late = any(d["late_days"] > 0 for d in docs) or (promised is not None and now > promised and state not in {"complete"})
     return {
@@ -700,30 +739,39 @@ def report_nonconformity(session: Session, event_bus: EventBus, doc: CommercialD
     reaction creates the review Task like any other Risk."""
 
     if doc.kind not in {K.CUSTOMER_DELIVERY, K.RECEPTION}:
-        raise BillingError("Une non-conformité se signale sur une livraison ou une réception")
+        raise BillingError(tx("Une non-conformité se signale sur une livraison ou une réception", "A non-conformity is reported on a delivery or a goods receipt"))
     if doc.status not in {"delivered", "received"}:
-        raise BillingError("Seule une livraison livrée / une réception reçue peut être déclarée non conforme")
+        raise BillingError(tx("Seule une livraison livrée / une réception reçue peut être déclarée non conforme", "Only a delivered delivery / a received goods receipt can be declared non-conforming"))
     line = next((ln for ln in doc.lines if ln.id == line_id), None)
     if line is None:
-        raise BillingError("Ligne introuvable")
+        raise BillingError(tx("Ligne introuvable", "Line not found"))
     if quantity is None or quantity <= 0 or quantity > line.quantity:
-        raise BillingError(f"Quantité non conforme invalide (entre 0 et {line.quantity:g})")
+        raise BillingError(tx(f"Quantité non conforme invalide (entre 0 et {line.quantity:g})", f"Invalid non-conforming quantity (between 0 and {line.quantity:g})"))
     if not (note or "").strip():
-        raise BillingError("Décrivez la non-conformité constatée")
+        raise BillingError(tx("Décrivez la non-conformité constatée", "Describe the non-conformity found"))
     line.quantity_nonconforming = float(quantity)
     line.nonconformity_note = note.strip()[:255]
     session.commit()
     _publish(event_bus, NONCONFORMITY_REPORTED, doc, {"line_id": str(line.id), "quantity": quantity, "note": line.nonconformity_note})
 
-    title = f"Non-conformité — {doc.number}"
+    title = f"Non-conformité — {doc.number}"  # French column, also the de-duplication key
     risk = session.query(Risk).filter_by(company_id=doc.company_id, title=title, status=RiskStatus.OPEN).first()
     created = False
     if risk is None:
         party = session.get(Customer, doc.customer_id) if doc.kind == K.CUSTOMER_DELIVERY and doc.customer_id else (session.get(Supplier, doc.supplier_id) if doc.supplier_id else None)
+        item = (line.product.name if line.product else line.description) or None
+        texts = both(lambda: {
+            "title": tx(f"Non-conformité — {doc.number}", f"Non-conformity — {doc.number}"),
+            "description": tx(
+                f"{quantity:g} × {item or 'article'} non conforme(s) ({line.nonconformity_note})"
+                + (f" — {party.name}" if party else "") + ". Envisager un avoir et, si la marchandise vient d'un fournisseur, une réclamation.",
+                f"{quantity:g} × {item or 'item'} non-conforming ({line.nonconformity_note})"
+                + (f" — {party.name}" if party else "") + ". Consider a credit note and, if the goods came from a supplier, a claim.",
+            ),
+        })
         risk = Risk(
             company_id=doc.company_id, title=title, severity=RiskSeverity.MEDIUM, status=RiskStatus.OPEN,
-            description=f"{quantity:g} × {(line.product.name if line.product else line.description) or 'article'} non conforme(s) ({line.nonconformity_note})"
-            + (f" — {party.name}" if party else "") + ". Envisager un avoir et, si la marchandise vient d'un fournisseur, une réclamation.",
+            description=texts["fr"]["description"], i18n=texts,
             related_entity_type=RelatedEntityType.COMMERCIAL_DOCUMENT, related_entity_id=doc.id,
         )  # fmt: skip
         session.add(risk)
@@ -747,7 +795,7 @@ def order_payment(session: Session, order: CommercialDocument, now: datetime | N
     live = [v for v in views if v.get("available")]
     total = doc_total(order)
     if not live:
-        return {"order_total": total, "invoiced": 0.0, "invoices": [{"id": v["invoice_id"], "number": v["number"], "status_label": v["status_label"]} for v in views], "state": "not_invoiced", "state_label": "Non facturée"}
+        return {"order_total": total, "invoiced": 0.0, "invoices": [{"id": v["invoice_id"], "number": v["number"], "status_label": v["status_label"]} for v in views], "state": "not_invoiced", "state_label": tx("Non facturée", "Not invoiced")}
     paid = round(sum(v["paid"] for v in live), 2)
     credited = round(sum(v["credited"] for v in live), 2)
     remaining = round(sum(v["remaining"] for v in live), 2)
@@ -767,7 +815,7 @@ def order_payment(session: Session, order: CommercialDocument, now: datetime | N
         "is_late": late,
         "overdue_amount": round(sum(v["overdue_amount"] for v in live), 2),
         "state": state,
-        "state_label": {"paid": "Réglée", "partially_paid": "Partiellement réglée", "unpaid": "Non réglée"}[state] + (" — en retard" if late else ""),
+        "state_label": {"paid": tx("Réglée", "Paid"), "partially_paid": tx("Partiellement réglée", "Partially paid"), "unpaid": tx("Non réglée", "Unpaid")}[state] + (" — en retard" if late else ""),
         "invoices": [{"id": v["invoice_id"], "number": v["number"], "status_label": v["status_label"], "remaining": v.get("remaining")} for v in views],
     }
 
@@ -797,7 +845,7 @@ def party_account(session: Session, company_id: uuid.UUID, *, customer_id: uuid.
     Supplier: balance > 0 = we owe the supplier."""
 
     if bool(customer_id) == bool(supplier_id):
-        raise BillingError("Un compte concerne un client ou un fournisseur")
+        raise BillingError(tx("Un compte concerne un client ou un fournisseur", "An account concerns a customer or a supplier"))
     now = now or _now()
     is_customer = customer_id is not None
     invoice_kind = K.CUSTOMER_INVOICE if is_customer else K.SUPPLIER_INVOICE
@@ -823,10 +871,10 @@ def party_account(session: Session, company_id: uuid.UUID, *, customer_id: uuid.
     unallocated = []
     for m in movements:
         if m.document_id in invoice_ids:
-            entries.append(_Entry(_aware(m.occurred_at), "payment", m.label or "Règlement", -m.amount, m.document_id, _number(session, m.document_id), bank_ref, _is_simulated(m.source)))
+            entries.append(_Entry(_aware(m.occurred_at), "payment", display_label(m.label) or tx("Règlement", "Payment"), -m.amount, m.document_id, _number(session, m.document_id), bank_ref, _is_simulated(m.source)))
         elif m.document_id is None and getattr(m, party_col.key) == (customer_id or supplier_id):
-            entries.append(_Entry(_aware(m.occurred_at), "unallocated_payment", m.label or "Paiement à rapprocher", -m.amount, None, None, bank_ref, _is_simulated(m.source), "Reçu, pas encore rapproché d'une facture"))
-            unallocated.append({"id": m.id, "amount": m.amount, "occurred_at": m.occurred_at, "label": m.label, "simulated": _is_simulated(m.source)})
+            entries.append(_Entry(_aware(m.occurred_at), "unallocated_payment", display_label(m.label) or tx("Paiement à rapprocher", "Payment to reconcile"), -m.amount, None, None, bank_ref, _is_simulated(m.source), tx("Reçu, pas encore rapproché d'une facture", "Received, not yet reconciled with an invoice")))
+            unallocated.append({"id": m.id, "amount": m.amount, "occurred_at": m.occurred_at, "label": display_label(m.label), "simulated": _is_simulated(m.source)})
 
     credit_notes = session.query(CommercialDocument).filter_by(company_id=company_id, kind=credit_kind, **party_filter).all()
     pending_credits, refund_due, credit_on_account = [], 0.0, 0.0
@@ -837,7 +885,7 @@ def party_account(session: Session, company_id: uuid.UUID, *, customer_id: uuid.
             # The whole credit leaves the balance once imputed: the part that
             # reduced the invoice, plus any excess (a refund owed, or a credit
             # kept on the account when nothing was invoiced).
-            note = ("Imputé sur la facture" + (f", dont {_eur(app.refund_amount)} à rembourser" if app.refund_amount > TOLERANCE else "")) if app.invoice_id else "Crédit disponible sur le compte"
+            note = (tx("Imputé sur la facture", "Applied to the invoice") + (tx(f", dont {_eur(app.refund_amount)} à rembourser", f", of which {_eur(app.refund_amount)} to refund") if app.refund_amount > TOLERANCE else "")) if app.invoice_id else tx("Crédit disponible sur le compte", "Credit available on the account")
             entries.append(_Entry(_aware(app.applied_at), "credit_note", f"Avoir {cn.number}", -round(total, 2), cn.id, cn.number, party_ref, cn.source == "simulated", note))
             if app.invoice_id is None:
                 credit_on_account += total
@@ -881,7 +929,7 @@ def party_account(session: Session, company_id: uuid.UUID, *, customer_id: uuid.
         "pending_credit_notes": pending_credits,
         "statement": statement,
         "has_simulated": any(e["simulated"] for e in statement),
-        "method": "Solde = factures émises − paiements reçus − avoirs imputés + remboursements versés. Les avoirs non validés ne sont pas déduits.",
+        "method": tx("Solde = factures émises − paiements reçus − avoirs imputés + remboursements versés. Les avoirs non validés ne sont pas déduits.", "Balance = issued invoices − payments received − applied credit notes + refunds paid. Unvalidated credit notes are not deducted."),
     }
 
 
@@ -910,7 +958,7 @@ def billing_overview(session: Session, company_id: uuid.UUID, now: datetime | No
         key=lambda x: x["due_at"],
     )  # fmt: skip
     unallocated = [
-        {"id": m.id, "amount": m.amount, "occurred_at": m.occurred_at, "label": m.label, "direction": m.direction, "counterparty": m.counterparty, "customer_id": m.customer_id, "supplier_id": m.supplier_id, "simulated": _is_simulated(m.source)}
+        {"id": m.id, "amount": m.amount, "occurred_at": m.occurred_at, "label": display_label(m.label), "direction": m.direction, "counterparty": m.counterparty, "customer_id": m.customer_id, "supplier_id": m.supplier_id, "simulated": _is_simulated(m.source)}
         for m in session.query(CashMovement).filter(CashMovement.company_id == company_id, CashMovement.status == "actual", CashMovement.category.in_(["customer_payment", "supplier_payment"]), CashMovement.document_id.is_(None)).order_by(CashMovement.occurred_at.desc()).all()
     ]  # fmt: skip
 
@@ -949,6 +997,6 @@ def billing_overview(session: Session, company_id: uuid.UUID, now: datetime | No
         "orders_awaiting_confirmation": awaiting,
         "deliveries_to_watch": physical,
         "accounting_refs": accounting_refs(session, company_id),
-        "method": "Calculé à la lecture depuis les factures, les paiements enregistrés et les avoirs imputés. Aucun montant n'est saisi deux fois.",
+        "method": tx("Calculé à la lecture depuis les factures, les paiements enregistrés et les avoirs imputés. Aucun montant n'est saisi deux fois.", "Computed on read from invoices, recorded payments and applied credit notes. No amount is entered twice."),
     }
 

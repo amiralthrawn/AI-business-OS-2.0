@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.core.analytics import compute_supplier_delivery_performance
 from app.core.entities import (
     CommercialDocument,
@@ -113,7 +114,7 @@ def _effective_quantity(quantity: float, moq: float | None, spq: float | None) -
         qty, notes = moq, [f"MOQ {moq:g}"]
     if spq and spq > 0 and not math.isclose(qty % spq, 0.0, abs_tol=1e-9):
         qty = math.ceil(qty / spq) * spq
-        notes.append(f"multiple de {spq:g} (SPQ)")
+        notes.append(tx(f"multiple de {spq:g} (SPQ)", f"multiple of {spq:g} (SPQ)"))
     return qty, (" · ".join(notes) or None)
 
 
@@ -134,14 +135,14 @@ def _quotes_for(session: Session, purchase_request_id: uuid.UUID | None, product
 def _performance(session: Session, supplier_id: uuid.UUID) -> tuple[Measure, float]:
     perf = compute_supplier_delivery_performance(session, supplier_id)
     if perf.trend == "insufficient_data" or perf.recent_on_time_rate is None:
-        return Measure(text="Historique insuffisant", basis=ValueBasis.UNKNOWN.value, confidence="none", source="Aucune réception mesurée"), 0.0
+        return Measure(text=tx("Historique insuffisant", "Insufficient history"), basis=ValueBasis.UNKNOWN.value, confidence="none", source=tx("Aucune réception mesurée", "No measured goods receipt")), 0.0
     # 0-100: on-time rate, minus a penalty for a deteriorating trend.
     score = perf.recent_on_time_rate * 100 - (10 if perf.trend == "deteriorating" else 0)
     confidence = "high" if perf.sample_size >= 8 else "medium" if perf.sample_size >= 4 else "low"
-    text = f"{perf.recent_on_time_rate:.0%} à l'heure · retard moyen {perf.recent_avg_delay_days:.1f} j"
+    text = tx(f"{perf.recent_on_time_rate:.0%} à l'heure · retard moyen {perf.recent_avg_delay_days:.1f} j", f"{perf.recent_on_time_rate:.0%} on time · average delay {perf.recent_avg_delay_days:.1f} d")
     return (
         Measure(value=round(max(score, 0), 1), unit="/100", text=text, basis=ValueBasis.OBSERVED.value, confidence=confidence,
-                source=f"{perf.sample_size} commandes réceptionnées"),
+                source=tx(f"{perf.sample_size} commandes réceptionnées", f"{perf.sample_size} orders received")),
         perf.recent_avg_delay_days or 0.0,
     )  # fmt: skip
 
@@ -149,13 +150,13 @@ def _performance(session: Session, supplier_id: uuid.UUID) -> tuple[Measure, flo
 def _availability(session: Session, product_id: uuid.UUID, supplier_id: uuid.UUID, needed: float) -> Measure:
     position = session.query(StockPosition).filter_by(product_id=product_id, supplier_id=supplier_id, kind=StockKind.SUPPLIER).order_by(StockPosition.as_of.desc()).first()
     if position is None:
-        return Measure(text="Non communiquée", basis=ValueBasis.UNKNOWN.value, confidence="none")
+        return Measure(text=tx("Non communiquée", "Not provided"), basis=ValueBasis.UNKNOWN.value, confidence="none")
     enough = position.quantity >= needed
     return Measure(
-        value=position.quantity, unit="unités",
-        text=f"{position.quantity:g} en stock fournisseur" + ("" if enough else f" (besoin {needed:g})"),
+        value=position.quantity, unit=tx("unités", "units"),
+        text=tx(f"{position.quantity:g} en stock fournisseur" + ("" if enough else f" (besoin {needed:g})"), f"{position.quantity:g} in supplier stock" + ("" if enough else f" (need {needed:g})")),
         basis=position.quantity_basis.value, confidence="medium" if enough else "low",
-        source=f"{position.source} au {position.as_of.date().isoformat()}",
+        source=tx(f"{position.source} au {position.as_of.date().isoformat()}", f"{position.source} as of {position.as_of.date().isoformat()}"),
     )  # fmt: skip
 
 
@@ -164,16 +165,16 @@ def _candidate(session: Session, product: Product, supplier: Supplier, terms: Pr
 
     # Price: this request's quote > catalog terms > nothing.
     if quote_line is not None and quote_line.unit_price is not None:
-        unit_price = Measure(value=quote_line.unit_price, unit="EUR", basis=quote_line.price_basis.value, confidence="high", source=f"Devis {quote_doc.number}")
+        unit_price = Measure(value=quote_line.unit_price, unit="EUR", basis=quote_line.price_basis.value, confidence="high", source=tx(f"Devis {quote_doc.number}", f"Quote {quote_doc.number}"))
     elif terms is not None and terms.unit_price is not None:
-        unit_price = Measure(value=terms.unit_price, unit="EUR", basis=terms.price_basis.value, confidence="medium" if terms.last_confirmed_at else "low", source="Conditions catalogue fournisseur")
+        unit_price = Measure(value=terms.unit_price, unit="EUR", basis=terms.price_basis.value, confidence="medium" if terms.last_confirmed_at else "low", source=tx("Conditions catalogue fournisseur", "Supplier catalogue terms"))
     else:
-        unit_price = Measure(unit="EUR", text="Prix non communiqué")
+        unit_price = Measure(unit="EUR", text=tx("Prix non communiqué", "Price not provided"))
 
     moq_v = (quote_line.moq if quote_line and quote_line.moq is not None else None) or (terms.moq if terms else None)
     spq_v = (quote_line.spq if quote_line and quote_line.spq is not None else None) or (terms.spq if terms else None)
     order_qty, qty_note = _effective_quantity(quantity, moq_v, spq_v)
-    order_quantity = Measure(value=order_qty, unit="unités", text=qty_note, basis=ValueBasis.DECLARED.value if (moq_v or spq_v) else ValueBasis.ESTIMATED.value, confidence="high")
+    order_quantity = Measure(value=order_qty, unit=tx("unités", "units"), text=qty_note, basis=ValueBasis.DECLARED.value if (moq_v or spq_v) else ValueBasis.ESTIMATED.value, confidence="high")
 
     transport_min = transport_max = 0.0
     transport_note = None
@@ -186,12 +187,12 @@ def _candidate(session: Session, product: Product, supplier: Supplier, terms: Pr
         base = unit_price.value * order_qty
         total_cost = Measure(
             min=round(base + transport_min, 2), max=round(base + transport_max, 2), unit="EUR",
-            text=" · ".join(filter(None, [qty_note and f"quantité ajustée : {qty_note}", transport_note or "transport non chiffré"])),
+            text=" · ".join(filter(None, [qty_note and tx(f"quantité ajustée : {qty_note}", f"adjusted quantity: {qty_note}"), transport_note or tx("transport non chiffré", "transport not priced")])),
             basis=unit_price.basis if transport_min == transport_max else ValueBasis.ESTIMATED.value,
             confidence=unit_price.confidence, source=unit_price.source,
         )  # fmt: skip
     else:
-        total_cost = Measure(unit="EUR", text="Non calculable sans prix")
+        total_cost = Measure(unit="EUR", text=tx("Non calculable sans prix", "Cannot be computed without a price"))
 
     performance, observed_delay = _performance(session, supplier.id)
 
@@ -202,17 +203,17 @@ def _candidate(session: Session, product: Product, supplier: Supplier, terms: Pr
         declared_max = lead_src.lead_time_max_days if lead_src.lead_time_max_days is not None else declared_min
         if performance.basis == ValueBasis.OBSERVED.value and observed_delay > 0.5:
             lead_time = Measure(
-                min=declared_min, max=round(declared_max + observed_delay, 1), unit="jours", basis=ValueBasis.ESTIMATED.value,
-                confidence="medium", text=f"annoncé {declared_min:g}–{declared_max:g} j, + {observed_delay:.1f} j de retard moyen observé",
-                source="Délai déclaré corrigé par l'historique réel",
+                min=declared_min, max=round(declared_max + observed_delay, 1), unit=tx("jours", "days"), basis=ValueBasis.ESTIMATED.value,
+                confidence="medium", text=tx(f"annoncé {declared_min:g}–{declared_max:g} j, + {observed_delay:.1f} j de retard moyen observé", f"stated {declared_min:g}–{declared_max:g} d, + {observed_delay:.1f} d of observed average delay"),
+                source=tx("Délai déclaré corrigé par l'historique réel", "Declared lead time corrected by actual history"),
             )  # fmt: skip
         else:
             lead_time = Measure(
-                min=declared_min, max=declared_max, unit="jours", basis=lead_src.lead_time_basis.value,
-                confidence="medium" if quote_line is not None else "low", source="Devis" if lead_src is quote_line else "Conditions catalogue",
+                min=declared_min, max=declared_max, unit=tx("jours", "days"), basis=lead_src.lead_time_basis.value,
+                confidence="medium" if quote_line is not None else "low", source=tx("Devis", "Quote") if lead_src is quote_line else tx("Conditions catalogue", "Catalogue terms"),
             )  # fmt: skip
     else:
-        lead_time = Measure(unit="jours", text="Délai non communiqué")
+        lead_time = Measure(unit=tx("jours", "days"), text=tx("Délai non communiqué", "Lead time not provided"))
 
     payment_terms_v = (terms.payment_terms if terms and terms.payment_terms else None) or supplier.payment_terms or (quote_doc.payment_terms if quote_doc else None)
     origin = (terms.country_of_origin if terms and terms.country_of_origin else None) or supplier.country
@@ -229,8 +230,8 @@ def _candidate(session: Session, product: Product, supplier: Supplier, terms: Pr
         quote_status=quote_doc.status if quote_doc else None,
         unit_price=unit_price, order_quantity=order_quantity, total_cost=total_cost, lead_time_days=lead_time,
         performance=performance, availability=_availability(session, product.id, supplier.id, order_qty),
-        moq=Measure(value=moq_v, unit="unités", basis=ValueBasis.DECLARED.value if moq_v else ValueBasis.UNKNOWN.value, confidence="medium" if moq_v else "none"),
-        spq=Measure(value=spq_v, unit="unités", basis=ValueBasis.DECLARED.value if spq_v else ValueBasis.UNKNOWN.value, confidence="medium" if spq_v else "none"),
+        moq=Measure(value=moq_v, unit=tx("unités", "units"), basis=ValueBasis.DECLARED.value if moq_v else ValueBasis.UNKNOWN.value, confidence="medium" if moq_v else "none"),
+        spq=Measure(value=spq_v, unit=tx("unités", "units"), basis=ValueBasis.DECLARED.value if spq_v else ValueBasis.UNKNOWN.value, confidence="medium" if spq_v else "none"),
         payment_terms=Measure(text=payment_terms_v, basis=ValueBasis.DECLARED.value if payment_terms_v else ValueBasis.UNKNOWN.value, confidence="medium" if payment_terms_v else "none"),
         origin_country=Measure(text=origin, basis=ValueBasis.DECLARED.value if origin else ValueBasis.UNKNOWN.value, confidence="medium" if origin else "none"),
         certifications=certifications, open_risks=open_risks,
@@ -278,7 +279,7 @@ def benchmark_suppliers(session: Session, product_id: uuid.UUID, quantity: float
             for c in candidates
         },
     }
-    labels = {"total_cost": "coût total", "lead_time": "délai", "performance": "performance", "availability": "disponibilité"}
+    labels = {"total_cost": tx("coût total", "total cost"), "lead_time": tx("délai", "lead time"), "performance": "performance", "availability": tx("disponibilité", "availability")}
     for c in candidates:
         total = 0.0
         for name, weight in WEIGHTS.items():
@@ -298,13 +299,13 @@ def benchmark_suppliers(session: Session, product_id: uuid.UUID, quantity: float
     if priced:
         recommended = max(priced, key=lambda c: c.score or 0)
         recommended.recommended = True
-        explanation.append(f"{recommended.supplier_name} obtient le meilleur score pondéré ({recommended.score:.0f}/100).")
+        explanation.append(tx(f"{recommended.supplier_name} obtient le meilleur score pondéré ({recommended.score:.0f}/100).", f"{recommended.supplier_name} has the best weighted score ({recommended.score:.0f}/100)."))
         if recommended.unknown_criteria:
-            explanation.append(f"Critères inconnus pour {recommended.supplier_name} : {', '.join(recommended.unknown_criteria)} (comptés neutres).")
+            explanation.append(tx(f"Critères inconnus pour {recommended.supplier_name} : {', '.join(recommended.unknown_criteria)} (comptés neutres).", f"Unknown criteria for {recommended.supplier_name}: {', '.join(recommended.unknown_criteria)} (counted as neutral)."))
         if recommended.open_risks:
-            explanation.append(f"Attention : {recommended.open_risks} risque(s) ouvert(s) sur ce fournisseur.")
+            explanation.append(tx(f"Attention : {recommended.open_risks} risque(s) ouvert(s) sur ce fournisseur.", f"Warning: {recommended.open_risks} open risk(s) on this supplier."))
     else:
-        explanation.append("Aucun fournisseur n'a de prix connu : pas de recommandation possible. Demandez des devis.")
+        explanation.append(tx("Aucun fournisseur n'a de prix connu : pas de recommandation possible. Demandez des devis.", "No supplier has a known price: no recommendation possible. Request quotes."))
 
     if recommended is None:
         confidence = "none"
@@ -314,7 +315,7 @@ def benchmark_suppliers(session: Session, product_id: uuid.UUID, quantity: float
         confidence = {0: "low", 1: "low", 2: "medium", 3: "high"}[rank.get(weakest, 0)]
         if len(priced) < 2:
             confidence = "low"
-            explanation.append("Un seul fournisseur chiffré : la comparaison est limitée.")
+            explanation.append(tx("Un seul fournisseur chiffré : la comparaison est limitée.", "Only one supplier is priced: the comparison is limited."))
 
     return Benchmark(
         product_id=product.id, product_name=product.name, quantity=quantity, purchase_request_id=purchase_request_id,

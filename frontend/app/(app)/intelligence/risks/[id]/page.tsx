@@ -3,18 +3,15 @@ import { notFound } from "next/navigation";
 import CreateTaskButton from "@/components/actions/CreateTaskButton";
 import TaskActionButtons from "@/components/actions/TaskActionButtons";
 import ContactCard from "@/components/data/ContactCard";
+import { ActionResult, Level, impactBadges, tasksFor } from "@/components/intelligence/AnalysisLevels";
+import DecisionOptions from "@/components/intelligence/DecisionOptions";
 import ReasoningTrail from "@/components/intelligence/ReasoningTrail";
 import Badge, { type BadgeTone } from "@/components/ui/Badge";
-import Card from "@/components/ui/Card";
 import { getHomeView, getRisk, getTasks } from "@/lib/api";
+import { valueLabel } from "@/lib/labels";
 import { entityHref, findPriorityFor, resolveEntityWithContact } from "@/lib/related-entity";
 
 export const dynamic = "force-dynamic";
-
-const SEVERITY_LABEL: Record<string, string> = { low: "faible", medium: "moyenne", high: "élevée", critical: "critique" };
-const STATUS_LABEL: Record<string, string> = { open: "ouvert", acknowledged: "pris en compte", resolved: "résolu" };
-const ENTITY_LABEL: Record<string, string> = { supplier: "fournisseur", customer: "client", product: "produit", transaction: "transaction", company: "entreprise" };
-const CONFIDENCE_LABEL: Record<string, string> = { low: "faible", medium: "moyenne", high: "élevée" };
 
 function severityTone(severity: string): BadgeTone {
   if (severity === "critical" || severity === "high") return "danger";
@@ -22,6 +19,10 @@ function severityTone(severity: string): BadgeTone {
   return "success";
 }
 
+// A Risk read in three levels (brain/decisions.md #57): what is happening ->
+// why it matters and what the OS recommends -> what can be done and what
+// really happened. Built from Business Context, Baseline/Significance,
+// Interpretation, Decision Intelligence and the HITL tasks -- no new data.
 export default async function RiskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
@@ -38,12 +39,15 @@ export default async function RiskDetailPage({ params }: { params: Promise<{ id:
     resolveEntityWithContact(risk.related_entity_type, risk.related_entity_id),
   ]);
   const entityName = related.name;
-
-  const relatedTask = tasks.find(
-    (t) => t.related_entity_type === risk.related_entity_type && t.related_entity_id === risk.related_entity_id && t.pending_action !== null
-  );
-
+  const subjectTasks = tasksFor(tasks, risk.related_entity_type, risk.related_entity_id);
+  const pendingTask = subjectTasks.find((t) => t.status === "pending_validation" && t.pending_action !== null);
   const priority = home ? findPriorityFor(home, "risk", risk.id) : null;
+  // Not among the current priorities: the Decision Intelligence analysis of
+  // the same subject (DecisionProposed, re-hydrated by GET /home), if any.
+  const decision =
+    !priority && home
+      ? home.decisions.find((d) => d.type === "risk" && d.entity_type === risk.related_entity_type && d.entity_id === risk.related_entity_id) ?? null
+      : null;
   const href = risk.related_entity_type ? entityHref(risk.related_entity_type, risk.related_entity_id ?? "") : null;
 
   return (
@@ -52,59 +56,92 @@ export default async function RiskDetailPage({ params }: { params: Promise<{ id:
         &larr; Retour aux risques
       </Link>
 
-      <div className="animate-reveal flex items-start justify-between gap-4">
-        <div>
-          <Badge label={`Priorité ${SEVERITY_LABEL[risk.severity] ?? risk.severity}`} tone={severityTone(risk.severity)} />
-          <h1 className="mt-2 font-display text-[28px] italic text-text">{risk.title}</h1>
-          <div className="mt-3">
-            <ReasoningTrail kind="risk" />
-          </div>
+      <div className="animate-reveal">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge label="Risque" tone="danger" />
+          <Badge label={`Priorité ${valueLabel("severity", risk.severity)}`} tone={severityTone(risk.severity)} />
+          <Badge label={valueLabel("signalStatus", risk.status)} tone="neutral" />
         </div>
-        <CreateTaskButton
-          defaultTitle={risk.title}
-          relatedEntityType={risk.related_entity_type ?? undefined}
-          relatedEntityId={risk.related_entity_id ?? undefined}
-        />
+        <h1 className="mt-2 font-display text-[28px] italic text-text">{risk.title}</h1>
+        <div className="mt-3">
+          <ReasoningTrail kind="risk" />
+        </div>
       </div>
 
-      {related.contact && entityName && risk.related_entity_type && (
-        <ContactCard contact={related.contact} entityName={entityName} entityType={risk.related_entity_type} entityId={risk.related_entity_id!} />
-      )}
+      <div className="space-y-6">
+        <Level n={1} title="Objet — ce qui se passe" question="Qu'est-ce qui a été constaté ?">
+          <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-text">{risk.description ?? "Aucun détail enregistré pour ce risque."}</p>
+          {risk.related_entity_type && (
+            <p className="mt-3 text-[13px] text-text-soft">
+              Concerne&nbsp;:{" "}
+              {href && entityName ? (
+                <Link href={href} className="font-semibold text-accent-strong hover:underline">
+                  {entityName}
+                </Link>
+              ) : (
+                valueLabel("entity", risk.related_entity_type)
+              )}{" "}
+              <span className="text-text-faint">({valueLabel("entity", risk.related_entity_type)})</span>
+            </p>
+          )}
+        </Level>
 
-      <Card className="p-7">
-        <span className="text-[11.5px] font-bold tracking-wide text-text-faint uppercase">Analyse de l&rsquo;IA</span>
-        <p className="mt-3 whitespace-pre-wrap text-[14px] leading-relaxed text-text">
-          {priority?.explanation ?? risk.description ?? "Aucun détail supplémentaire enregistré pour ce risque."}
-        </p>
-        {priority?.recommendation && (
-          <p className="mt-3 text-[13.5px] text-text-soft">
-            <span className="font-semibold text-text">Recommandation&nbsp;: </span>
-            {priority.recommendation}
-          </p>
-        )}
-        {priority && <p className="mt-3 text-[12px] text-text-faint">confiance {CONFIDENCE_LABEL[priority.confidence] ?? priority.confidence}</p>}
-      </Card>
+        <Level n={2} title="Analyse & solution" question="Pourquoi est-ce important, et que recommande l'OS ?">
+          {priority ? (
+            <div className="space-y-3">
+              {impactBadges(priority)}
+              {priority.explanation && <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-text">{priority.explanation}</p>}
+              <p className="text-[13.5px] text-text">
+                <span className="font-semibold">Ce que l&rsquo;OS recommande&nbsp;: </span>
+                {priority.recommendation ?? "pas assez d'information pour recommander une action — la situation reste à surveiller."}
+              </p>
+              {priority.decision_options && priority.decision_options.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Options étudiées</p>
+                  <DecisionOptions options={priority.decision_options} chosen={priority.recommendation} entityType={risk.related_entity_type} entityId={risk.related_entity_id} />
+                </div>
+              )}
+            </div>
+          ) : decision ? (
+            <div className="space-y-3">
+              {impactBadges({ confidence: decision.confidence })}
+              {decision.recommendation.reasoning && <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-text">{decision.recommendation.reasoning}</p>}
+              <p className="text-[13.5px] text-text">
+                <span className="font-semibold">Ce que l&rsquo;OS recommande&nbsp;: </span>
+                {decision.recommendation.chosen_option ?? "pas assez d'information pour recommander une action — la situation reste à surveiller."}
+              </p>
+              {decision.options.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Options étudiées</p>
+                  <DecisionOptions options={decision.options} chosen={decision.recommendation.chosen_option} entityType={risk.related_entity_type} entityId={risk.related_entity_id} />
+                </div>
+              )}
+              <p className="text-[11.5px] text-text-faint">Analyse produite par l&rsquo;Intelligence décisionnelle le <span className="num">{new Date(decision.occurred_at).toLocaleDateString("fr-FR")}</span>.</p>
+            </div>
+          ) : (
+            <p className="text-[13.5px] text-text-soft">L&rsquo;OS n&rsquo;a pas encore produit d&rsquo;analyse pour ce risque : il n&rsquo;est pas parmi les priorités actuelles ou les données sont insuffisantes.</p>
+          )}
+        </Level>
 
-      <div className="grid gap-5 sm:grid-cols-2">
-        <Card className="p-6">
-          <p className="text-[13px] text-text-soft">Statut</p>
-          <p className="mt-1.5 text-[14.5px] font-semibold text-text">{STATUS_LABEL[risk.status] ?? risk.status}</p>
-        </Card>
-        {risk.related_entity_type && (
-          <Card className="p-6">
-            <p className="text-[13px] text-text-soft">Entité concernée</p>
-            {href && entityName ? (
-              <Link href={href} className="mt-1.5 block text-[14.5px] font-semibold text-accent-strong hover:underline">
-                {entityName}
-              </Link>
-            ) : (
-              <p className="mt-1.5 text-[14.5px] font-semibold text-text">{ENTITY_LABEL[risk.related_entity_type] ?? risk.related_entity_type}</p>
+        <Level n={3} title="Action & résultat" question="Que pouvez-vous faire, et qu'est-ce qui a réellement été obtenu ?" tone="muted">
+          <div className="space-y-4">
+            {pendingTask && (
+              <div>
+                <p className="mb-1.5 text-[12.5px] text-text-soft">Une action proposée attend votre décision — rien n&rsquo;est exécuté sans validation :</p>
+                <TaskActionButtons taskId={pendingTask.id} taskTitle={pendingTask.title} />
+              </div>
             )}
-          </Card>
-        )}
+            {related.contact && entityName && risk.related_entity_type && (
+              <ContactCard contact={related.contact} entityName={entityName} entityType={risk.related_entity_type} entityId={risk.related_entity_id!} />
+            )}
+            <CreateTaskButton defaultTitle={risk.title} relatedEntityType={risk.related_entity_type ?? undefined} relatedEntityId={risk.related_entity_id ?? undefined} />
+            <div>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Résultat</p>
+              <ActionResult tasks={subjectTasks} />
+            </div>
+          </div>
+        </Level>
       </div>
-
-      {relatedTask && relatedTask.status === "pending_validation" && <TaskActionButtons taskId={relatedTask.id} taskTitle={relatedTask.title} />}
     </main>
   );
 }

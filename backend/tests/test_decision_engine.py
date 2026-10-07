@@ -6,6 +6,7 @@ mechanism as a Task proposal, never executed automatically."""
 
 from datetime import datetime, timedelta, timezone
 
+from app.ai.llm import DETERMINISTIC_MARKER
 from app.ai.capabilities import build_capability_registry
 from app.ai.llm import DeterministicLLMClient
 from app.business_context.service import BusinessContextService
@@ -161,7 +162,7 @@ def test_build_decision_for_a_risk_has_several_options_with_trade_offs(db_sessio
     for text in (decision.problem, decision.recommendation.reasoning, decision.recommendation.chosen_option):
         assert "Context:" not in text
         assert "{" not in text
-        assert "deterministic answer" not in text
+        assert DETERMINISTIC_MARKER not in text
     assert "Renegotiate" not in decision.recommendation.chosen_option
 
 

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import text_of, tx
 from app.communications.service import _INTENTS, _row
 from app.connectors.registry import connector_registry
 from app.core.analytics import _as_aware_utc
@@ -37,14 +38,27 @@ from app.core.entities.people import Candidate
 # Below this many sent messages a rate or an average means nothing.
 MIN_SAMPLE = 3
 
+# Labels and rules in both interface languages (French, English) -- see _localized().
 MAILBOXES: list[dict] = [
-    {"key": "sales", "address": "sales@", "group": "Commercial", "label": "Ventes", "rule": "Client lié au message, ou demande de devis/prix d'un expéditeur qui n'est pas fournisseur."},
-    {"key": "orders", "address": "orders@", "group": "Commandes", "label": "Commandes", "rule": "Message d'un client parlant de commande, livraison ou facture."},
-    {"key": "rfq", "address": "rfq@", "group": "Achats", "label": "Achats & devis fournisseurs", "rule": "Fournisseur lié au message (devis, prix, délais, factures fournisseur)."},
-    {"key": "careers", "address": "careers@", "group": "Recrutement", "label": "Candidatures", "rule": "Candidat créé à partir du message, ou intention « candidature »."},
-    {"key": "support", "address": "support@", "group": "Support", "label": "Support client", "rule": "Mots d'incident (panne, urgence, réclamation, défaut, SAV)."},
-    {"key": "contact", "address": "contact@", "group": "Général", "label": "Contact général", "rule": "Tout autre message externe (formulaire du site, email non classé)."},
-]
+    {"key": "sales", "address": "sales@", "group": ("Commercial", "Sales"), "label": ("Ventes", "Sales"),
+     "rule": ("Client lié au message, ou demande de devis/prix d'un expéditeur qui n'est pas fournisseur.", "Customer linked to the message, or a quote/price request from a sender who is not a supplier.")},
+    {"key": "orders", "address": "orders@", "group": ("Commandes", "Orders"), "label": ("Commandes", "Orders"),
+     "rule": ("Message d'un client parlant de commande, livraison ou facture.", "Message from a customer about an order, a delivery or an invoice.")},
+    {"key": "rfq", "address": "rfq@", "group": ("Achats", "Procurement"), "label": ("Achats & devis fournisseurs", "Procurement & supplier quotes"),
+     "rule": ("Fournisseur lié au message (devis, prix, délais, factures fournisseur).", "Supplier linked to the message (quotes, prices, lead times, supplier invoices).")},
+    {"key": "careers", "address": "careers@", "group": ("Recrutement", "Recruitment"), "label": ("Candidatures", "Applications"),
+     "rule": ("Candidat créé à partir du message, ou intention « candidature ».", 'Candidate created from the message, or an "application" intent.')},
+    {"key": "support", "address": "support@", "group": ("Support", "Support"), "label": ("Support client", "Customer support"),
+     "rule": ("Mots d'incident (panne, urgence, réclamation, défaut, SAV).", "Incident words (breakdown, urgent, complaint, defect, after-sales).")},
+    {"key": "contact", "address": "contact@", "group": ("Général", "General"), "label": ("Contact général", "General contact"),
+     "rule": ("Tout autre message externe (formulaire du site, email non classé).", "Any other external message (website form, unclassified email).")},
+]  # fmt: skip
+
+
+def _localized(box: dict) -> dict:
+    return {k: tx(*v) if isinstance(v, tuple) else v for k, v in box.items()}
+
+
 MAILBOX_KEYS = {m["key"] for m in MAILBOXES}
 
 _SUPPORT_RE = re.compile(r"\b(panne|urgent|urgence|réclamation|reclamation|défaut|defaut|sav|line down|is down|broken|complaint|support)\b", re.IGNORECASE)
@@ -65,24 +79,24 @@ def classify(c: Communication, candidate_comm_ids: set[uuid.UUID]) -> tuple[str,
     intents = _intent_keys(c)
     text = f"{c.subject or ''} {c.body or ''}".lower()
     if c.id in candidate_comm_ids or c.related_entity_type == RelatedEntityType.CANDIDATE:
-        return "careers", "Candidat lié à ce message"
+        return "careers", tx("Candidat lié à ce message", "Candidate linked to this message")
     if c.purpose in {"interview_invite"} or "application" in intents:
-        return "careers", "Intention « candidature » détectée"
+        return "careers", tx("Intention « candidature » détectée", '"Application" intent detected')
     if c.related_entity_type == RelatedEntityType.SUPPLIER:
-        return "rfq", "Fournisseur lié"
+        return "rfq", tx("Fournisseur lié", "Linked supplier")
     if c.channel_detail == "agency_proposal":
-        return "contact", "Sollicitation commerciale reçue (agence)"
+        return "contact", tx("Sollicitation commerciale reçue (agence)", "Commercial solicitation received (agency)")
     if _SUPPORT_RE.search(text):
-        return "support", "Mots d'incident détectés"
+        return "support", tx("Mots d'incident détectés", "Incident words detected")
     if c.related_entity_type == RelatedEntityType.CUSTOMER and intents & {"order", "delivery", "invoice"}:
-        return "orders", "Client lié · commande/livraison/facture"
+        return "orders", tx("Client lié · commande/livraison/facture", "Linked customer · order/delivery/invoice")
     if c.related_entity_type == RelatedEntityType.CUSTOMER:
-        return "sales", "Client lié"
+        return "sales", tx("Client lié", "Linked customer")
     if "quote_request" in intents or c.channel_detail == "quote_form":
-        return "sales", "Demande de devis/prix"
+        return "sales", tx("Demande de devis/prix", "Quote/price request")
     if c.channel_detail == "contact_form":
-        return "contact", "Formulaire de contact du site"
-    return "contact", "Aucune règle plus précise"
+        return "contact", tx("Formulaire de contact du site", "Website contact form")
+    return "contact", tx("Aucune règle plus précise", "No more specific rule")
 
 
 def _is_answered(msg: Communication, sent: list[Communication], now: datetime) -> Communication | None:
@@ -114,11 +128,11 @@ def _box_status(messages: list[Communication]) -> tuple[str, str]:
     delivered to this address; seeded/demo messages never make a box connected."""
 
     if not messages:
-        return "not_configured", "Aucune adresse ni aucun message : boîte non configurée."
+        return "not_configured", tx("Aucune adresse ni aucun message : boîte non configurée.", "No address and no message: mailbox not configured.")
     real = [m for m in messages if m.direction == CommunicationDirection.INBOUND and m.to_address and m.source and m.source not in _DEMO_SOURCES]
     if real and not _email_provider_is_demo():
-        return "connected", "Messages reçus par une source connectée."
-    return "demo", "Messages issus des fournisseurs de démonstration ; aucune boîte réelle n'est connectée."
+        return "connected", tx("Messages reçus par une source connectée.", "Messages received from a connected source.")
+    return "demo", tx("Messages issus des fournisseurs de démonstration ; aucune boîte réelle n'est connectée.", "Messages from the demo providers; no real mailbox is connected.")
 
 
 def mailbox_overview(session: Session, company_id: uuid.UUID) -> dict:
@@ -140,7 +154,7 @@ def mailbox_overview(session: Session, company_id: uuid.UUID) -> dict:
         inbound = [c for c in msgs if c.direction == CommunicationDirection.INBOUND]
         status, status_reason = _box_status(msgs)
         boxes.append(
-            m
+            _localized(m)
             | {
                 "status": status,
                 "status_reason": status_reason,
@@ -155,7 +169,7 @@ def mailbox_overview(session: Session, company_id: uuid.UUID) -> dict:
         "mailboxes": boxes,
         "excluded_count": excluded,
         "providers": [{"connector": k, "provider": v, "demo": v.startswith("Mock")} for k, v in providers.items()],
-        "method": "Classement déterministe des messages existants (règle affichée sur chaque message). Aucune adresse réelle n'est connectée.",
+        "method": tx("Classement déterministe des messages existants (règle affichée sur chaque message). Aucune adresse réelle n'est connectée.", "Deterministic classification of existing messages (rule shown on each message). No real address is connected."),
     }
 
 
@@ -249,7 +263,7 @@ def follow_up_performance(session: Session, company_id: uuid.UUID) -> dict:
         "by_purpose": sorted(by_purpose.values(), key=lambda b: -b["prepared"]),
         "sufficient": enough,
         "min_sample": MIN_SAMPLE,
-        "method": "Comptage des messages réels. Envoi = remis au fournisseur email (simulé en démonstration). Réponse = message entrant sur le même fil ou du même contact après l'envoi. Commande = commande dérivée d'un document concerné par le message.",
+        "method": tx("Comptage des messages réels. Envoi = remis au fournisseur email (simulé en démonstration). Réponse = message entrant sur le même fil ou du même contact après l'envoi. Commande = commande dérivée d'un document concerné par le message.", "Count of real messages. Sent = handed to the email provider (simulated in the demo). Reply = incoming message on the same thread or from the same contact after sending. Order = order derived from a document the message concerns."),
     }
 
 
@@ -279,12 +293,12 @@ def campaign_performance(session: Session, company_id: uuid.UUID) -> dict:
             proposals.append(_row(session, c))
             continue
         m = _CAMPAIGN_RE.search(c.subject or "") or _CAMPAIGN_RE.search(c.body or "")
-        name = m.group(1) if m else "Sans nom"
+        name = m.group(1) if m else tx("Sans nom", "Unnamed")
         camp = campaigns.setdefault(name, {"name": name, "reports": [], "feedback": [], "declared": [], "observed": None})
         if c.channel_detail == "campaign_report":
             camp["reports"].append(_row(session, c))
             for pct in _PCT_RE.findall(c.body or ""):
-                camp["declared"].append({"text": (c.body or "")[:200], "value_pct": float(pct.replace(",", ".")), "source": "Rapport interne", "basis": "declared"})
+                camp["declared"].append({"text": (c.body or "")[:200], "value_pct": float(pct.replace(",", ".")), "source": tx("Rapport interne", "Internal report"), "basis": "declared"})
         else:
             camp["feedback"].append(_row(session, c))
         month = _MONTHS_FR.get(name.lower())
@@ -299,13 +313,13 @@ def campaign_performance(session: Session, company_id: uuid.UUID) -> dict:
                 "previous_inbound_requests": prev,
                 "change_pct": ((cur - prev) / prev) if prev else None,
                 "basis": "observed",
-                "note": "Demandes entrantes (site + email) comptées dans la base sur la période. Toutes les demandes, pas seulement celles liées à la campagne.",
+                "note": tx("Demandes entrantes (site + email) comptées dans la base sur la période. Toutes les demandes, pas seulement celles liées à la campagne.", "Incoming requests (website + email) counted in the database over the period. All requests, not only those linked to the campaign."),
             }
 
     # Team feedback also lives in tasks mentioning a campaign.
     tasks = [t for t in session.query(Task).filter(Task.company_id == company_id).all() if "campagne" in f"{t.title or ''} {t.description or ''}".lower()]
     for camp in campaigns.values():
-        camp["tasks"] = [{"id": t.id, "title": t.title, "status": getattr(t.status, "value", t.status)} for t in tasks if camp["name"].lower() in f"{t.title or ''} {t.description or ''}".lower()]
+        camp["tasks"] = [{"id": t.id, "title": text_of(t, "title"), "status": getattr(t.status, "value", t.status)} for t in tasks if camp["name"].lower() in f"{t.title or ''} {t.description or ''}".lower()]
         camp["metrics"] = {
             "budget": None,
             "prospects_attributed": None,
@@ -315,12 +329,12 @@ def campaign_performance(session: Session, company_id: uuid.UUID) -> dict:
             "cost_per_prospect": None,
         }
         camp["limits"] = [
-            "Budget non enregistré : ROI et coût par prospect incalculables.",
-            "Aucun lien entre les demandes entrantes et la campagne (pas de source ni de code de suivi) : attribution non établie.",
+            tx("Budget non enregistré : ROI et coût par prospect incalculables.", "No budget recorded: ROI and cost per prospect cannot be computed."),
+            tx("Aucun lien entre les demandes entrantes et la campagne (pas de source ni de code de suivi) : attribution non établie.", "No link between incoming requests and the campaign (no source or tracking code): attribution not established."),
         ]
     return {
         "campaigns": list(campaigns.values()),
         "agency_proposals": proposals,
         "channels_connected": [],
-        "method": "Campagnes identifiées dans les messages existants. Déclaré = écrit dans un rapport ; observé = compté dans la base ; rien n'est attribué sans lien réel.",
+        "method": tx("Campagnes identifiées dans les messages existants. Déclaré = écrit dans un rapport ; observé = compté dans la base ; rien n'est attribué sans lien réel.", "Campaigns identified in existing messages. Declared = written in a report; observed = counted in the database; nothing is attributed without a real link."),
     }

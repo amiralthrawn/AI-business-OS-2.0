@@ -7,6 +7,7 @@ tests/test_decision_engine.py)."""
 
 from datetime import datetime, timedelta, timezone
 
+from app.ai.llm import DETERMINISTIC_MARKER
 from app.ai.capabilities import build_capability_registry
 from app.ai.llm import DeterministicLLMClient
 from app.business_context.service import BusinessContextService
@@ -214,7 +215,7 @@ def test_interpret_event_never_leaks_technical_noise_without_a_real_llm(db_sessi
     for text in (interpretation.title, interpretation.explanation, interpretation.recommendation):
         assert text is not None
         assert "margin_pct" not in text
-        assert "deterministic answer" not in text
+        assert DETERMINISTIC_MARKER not in text
         assert "Context:" not in text
         assert "{" not in text
     assert "Frame" in interpretation.title

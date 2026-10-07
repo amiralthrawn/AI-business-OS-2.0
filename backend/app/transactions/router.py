@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.transactions.margin import display_cost_source
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user
 from app.access.policy import DOMAIN_VIEW_PERMISSION
 from app.core.entities import (
@@ -27,7 +29,7 @@ from app.domains.procurement.benchmark import benchmark_suppliers
 from app.objects.graph import document_chain
 from app.objects.registry import summarize
 from app.transactions import service
-from app.transactions.lifecycle import DERIVATIONS, KIND_WRITE_PERMISSION, KINDS, status_label
+from app.transactions.lifecycle import DERIVATIONS, KIND_WRITE_PERMISSION, KINDS, kind_label, status_label, status_labels
 from app.transactions.margin import compute_document_margin
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -138,18 +140,18 @@ class CostIn(BaseModel):
 def _get(db: Session, company: Company, doc_id: uuid.UUID) -> CommercialDocument:
     doc = db.get(CommercialDocument, doc_id)
     if doc is None or doc.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Document introuvable")
+        raise HTTPException(status_code=404, detail=tx("Document introuvable", "Document not found"))
     return doc
 
 
 def _require_view(user: CurrentUser, kind: DocumentKind) -> None:
     if not user.can(DOMAIN_VIEW_PERMISSION[KINDS[kind].domain]):
-        raise HTTPException(status_code=403, detail="Votre profil n'a pas accès à ce document.")
+        raise HTTPException(status_code=403, detail=tx("Votre profil n'a pas accès à ce document.", "Your profile does not have access to this document."))
 
 
 def _require_kind(user: CurrentUser, kind: DocumentKind) -> None:
     if not user.can(KIND_WRITE_PERMISSION[kind]):
-        raise HTTPException(status_code=403, detail=f"Votre rôle ne permet pas de modifier un(e) {KINDS[kind].label.lower()}.")
+        raise HTTPException(status_code=403, detail=tx(f"Votre rôle ne permet pas de modifier un(e) {KINDS[kind].label.lower()}.", f"Your role does not allow editing a {kind_label(kind).lower()}."))
 
 
 def _party(db: Session, doc: CommercialDocument) -> dict | None:
@@ -178,7 +180,7 @@ def serialize_summary(db: Session, doc: CommercialDocument) -> dict:
     return {
         "id": doc.id,
         "kind": doc.kind.value,
-        "kind_label": spec.label,
+        "kind_label": kind_label(doc.kind),
         "domain": spec.domain,
         "number": doc.number,
         "status": doc.status,
@@ -220,7 +222,7 @@ def serialize_detail(db: Session, doc: CommercialDocument) -> dict:
                 "lead_time_basis": ln.lead_time_basis.value, "moq": ln.moq, "spq": ln.spq,
                 "planned_unit_cost": ln.planned_unit_cost,
                 "planned_cost_basis": ln.planned_cost_basis.value if ln.planned_cost_basis else None,
-                "planned_cost_source": ln.planned_cost_source,
+                "planned_cost_source": display_cost_source(ln.planned_cost_source),
                 "quantity_nonconforming": ln.quantity_nonconforming, "nonconformity_note": ln.nonconformity_note,
             }
             for ln in doc.lines
@@ -259,8 +261,8 @@ def meta() -> dict:
     return {
         "kinds": [
             {
-                "kind": kind.value, "label": spec.label, "prefix": spec.prefix, "domain": spec.domain, "party": spec.party,
-                "initial_status": spec.initial_status, "statuses": spec.status_labels, "terminal": sorted(spec.terminal),
+                "kind": kind.value, "label": kind_label(kind), "prefix": spec.prefix, "domain": spec.domain, "party": spec.party,
+                "initial_status": spec.initial_status, "statuses": status_labels(kind), "terminal": sorted(spec.terminal),
                 "derivations": [t.value for t in DERIVATIONS.get(kind, ())],
             }
             for kind, spec in KINDS.items()
@@ -273,7 +275,7 @@ def meta() -> dict:
 @router.get("/margins")
 def order_margins(limit: int = 50, db: Session = Depends(get_db), company: Company = Depends(current_company), user: CurrentUser = Depends(get_current_user)) -> list[dict]:
     if not user.can("view:finance"):
-        raise HTTPException(status_code=403, detail="Votre profil n'a pas accès à la finance.")
+        raise HTTPException(status_code=403, detail=tx("Votre profil n'a pas accès à la finance.", "Your profile does not have access to finance."))
     """Planned vs current margin of every non-cancelled customer order --
     Finance's per-order view, computed by the same engine as a document page."""
 

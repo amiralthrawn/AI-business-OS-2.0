@@ -7,18 +7,19 @@ hard-coded in two places."""
 from dataclasses import dataclass
 
 from app.core.entities import DocumentKind
+from app.core.i18n import current_locale
 
 
 @dataclass(frozen=True)
 class KindSpec:
     prefix: str
-    label: str  # French UI label, singular
+    label: str  # French UI label, singular (English: KIND_LABELS_EN; use kind_label())
     domain: str  # "sales" | "procurement"
     party: str  # "customer" | "supplier"
     initial_status: str
     # status -> allowed next statuses
     transitions: dict[str, tuple[str, ...]]
-    status_labels: dict[str, str]
+    status_labels: dict[str, str]  # French (English: STATUS_LABELS_EN; use status_label())
     # Statuses meaning "this document is finished" (won/lost, closed, ...).
     terminal: frozenset[str]
 
@@ -324,5 +325,61 @@ def manual_transitions(kind: DocumentKind, status: str) -> tuple[str, ...]:
     return tuple(s for s in allowed_transitions(kind, status) if s not in blocked)
 
 
+# English labels (brain/decisions.md #58). The French ones live in KINDS.
+KIND_LABELS_EN: dict[DocumentKind, str] = {
+    K.CUSTOMER_REQUEST: "Customer request",
+    K.CUSTOMER_QUOTE: "Customer quote",
+    K.CUSTOMER_ORDER: "Customer order",
+    K.CUSTOMER_DELIVERY: "Customer delivery",
+    K.CUSTOMER_INVOICE: "Customer invoice",
+    K.PURCHASE_REQUEST: "Purchase request",
+    K.SUPPLIER_QUOTE: "Supplier quote",
+    K.PURCHASE_ORDER: "Purchase order",
+    K.RECEPTION: "Goods receipt",
+    K.SUPPLIER_INVOICE: "Supplier invoice",
+    K.CUSTOMER_CREDIT_NOTE: "Customer credit note",
+    K.SUPPLIER_CREDIT_NOTE: "Supplier credit note",
+}
+STATUS_LABELS_EN: dict[DocumentKind, dict[str, str]] = {
+    K.CUSTOMER_REQUEST: {"new": "New", "qualifying": "Qualifying", "quoting": "Quoting", "negotiating": "Negotiating", "won": "Won", "lost": "Lost"},
+    K.CUSTOMER_QUOTE: {"draft": "Draft", "sent": "Sent", "accepted": "Accepted", "rejected": "Rejected", "expired": "Expired", "cancelled": "Cancelled"},
+    K.CUSTOMER_ORDER: {
+        "draft": "Draft", "sent": "Sent to the customer", "acknowledged": "Acknowledged by the customer", "confirmed": "Confirmed",
+        "delivered": "Delivered", "invoiced": "Invoiced", "closed": "Closed", "cancelled": "Cancelled",
+    },
+    K.CUSTOMER_DELIVERY: {"planned": "Planned", "shipped": "Shipped", "delivered": "Delivered", "cancelled": "Cancelled"},
+    K.CUSTOMER_INVOICE: {"draft": "Draft", "issued": "Issued", "partially_paid": "Partially paid", "paid": "Paid", "cancelled": "Cancelled"},
+    K.PURCHASE_REQUEST: {
+        "draft": "Draft", "consulting": "Consulting suppliers", "comparing": "Comparing", "decided": "Supplier chosen",
+        "ordered": "Ordered", "cancelled": "Cancelled",
+    },
+    K.SUPPLIER_QUOTE: {"requested": "Requested", "received": "Received", "selected": "Selected", "declined": "Declined"},
+    K.PURCHASE_ORDER: {"draft": "Draft", "sent": "Sent", "confirmed": "Confirmed", "received": "Received", "closed": "Closed", "cancelled": "Cancelled"},
+    K.RECEPTION: {"expected": "Expected", "received": "Received", "cancelled": "Cancelled"},
+    K.SUPPLIER_INVOICE: {"received": "Received", "approved": "Approved", "disputed": "Disputed", "partially_paid": "Partially paid", "paid": "Paid"},
+    K.CUSTOMER_CREDIT_NOTE: {
+        "draft": "Prepared", "submitted": "Sent to the customer — awaiting answer", "accepted": "Accepted by the customer",
+        "rejected": "Rejected by the customer", "validated": "Validated by accounting", "applied": "Applied to the customer account",
+        "refunded": "Refunded", "cancelled": "Cancelled",
+    },
+    K.SUPPLIER_CREDIT_NOTE: {
+        "requested": "Claim sent — credit note requested", "confirmed": "Credit note confirmed by the supplier",
+        "rejected": "Rejected by the supplier", "applied": "Applied", "cancelled": "Cancelled",
+    },
+}  # fmt: skip
+
+
+def kind_label(kind: DocumentKind) -> str:
+    """The document kind's UI label in the active language."""
+
+    return KIND_LABELS_EN[kind] if current_locale() == "en" else KINDS[kind].label
+
+
 def status_label(kind: DocumentKind, status: str) -> str:
+    if current_locale() == "en":
+        return STATUS_LABELS_EN[kind].get(status, status)
     return KINDS[kind].status_labels.get(status, status)
+
+
+def status_labels(kind: DocumentKind) -> dict[str, str]:
+    return {status: status_label(kind, status) for status in KINDS[kind].status_labels}

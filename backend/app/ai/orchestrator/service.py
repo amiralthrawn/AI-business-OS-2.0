@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, llm_language, money, num, pct, tx
+from app.core.observable_labels import domain_label
 from app.ai.agents import AGENTS, Agent
 from app.ai.capabilities.base import CapabilityError
 from app.ai.capabilities.registry import CapabilityRegistry
@@ -44,6 +46,18 @@ from app.ai.llm import DeterministicLLMClient, LLMClient
 from app.core.entities import CommercialDocument, Customer, DocumentKind, Product, RelatedEntityType, Supplier
 from app.core.events.bus import EventBus
 
+
+
+def _review_task_texts(target_name: str, question: str, *, is_supplier: bool) -> dict:
+    """Title/description of the review Task proposed from Ask AI, in both
+    interface languages (the question stays as the user wrote it)."""
+
+    texts = both(lambda: {
+        "title": (tx(f"Examiner le fournisseur {target_name}", f"Review supplier {target_name}") if is_supplier
+                  else tx(f"Examiner le produit {target_name}", f"Review product {target_name}")),
+        "description": tx(f"Demandé via l'assistant IA : « {question} »", f'Requested via the AI assistant: "{question}"'),
+    })  # fmt: skip
+    return {"title": texts["fr"]["title"], "description": texts["fr"]["description"], "i18n": texts}
 
 class OrchestratorError(Exception):
     """A clean, expected failure: nothing to route to, nothing to resolve, a
@@ -204,58 +218,70 @@ def _resolve_entity_by_ref(
 
 def _fmt_eur(value: float | None) -> str:
     if value is None:
-        return "montant inconnu"
-    return f"{value:,.0f} €".replace(",", " ")
+        return tx("montant inconnu", "unknown amount")
+    return money(value, 0)
 
 
 def _fmt_pct(value: float | None) -> str:
     if value is None:
-        return "taux inconnu"
-    return f"{value * 100:.1f} %".replace(".", ",")
+        return tx("taux inconnu", "unknown rate")
+    return pct(value)
 
 
-_TREND_LABEL_FR = {
-    "deteriorating": "en dégradation",
-    "declining": "en déclin",
-    "improving": "en amélioration",
-    "growing": "en croissance",
-    "stable": "stable",
-    "insufficient_data": "données insuffisantes",
+_TREND_LABELS = {
+    "deteriorating": ("en dégradation", "deteriorating"),
+    "declining": ("en déclin", "declining"),
+    "improving": ("en amélioration", "improving"),
+    "growing": ("en croissance", "growing"),
+    "stable": ("stable", "stable"),
+    "insufficient_data": ("données insuffisantes", "insufficient data"),
 }
+_BASIS_LABELS = {
+    "observed": ("réel", "actual"), "declared": ("déclaré", "declared"), "estimated": ("estimé", "estimated"),
+    "benchmark": ("référence marché", "market reference"), "simulated": ("simulé", "simulated"), "unknown": ("inconnu", "unknown"),
+}
+_CONFIDENCE_LABELS = {"high": ("élevée", "high"), "medium": ("moyenne", "medium"), "low": ("faible", "low"), "none": ("aucune", "none")}
+
+
+def _label(table: dict, value) -> str:
+    return tx(*table[value]) if value in table else str(value)
 
 
 def _summarize_capability_result(name: str, data: dict) -> str | None:
-    """One French sentence for a single capability's real result -- the
-    building block of `_deterministic_answer` below. Returns `None` for a
-    capability this function doesn't know how to summarize (e.g.
+    """One sentence, in the active language, for a single capability's real
+    result -- the building block of `_deterministic_answer` below. Returns
+    `None` for a capability this function doesn't know how to summarize (e.g.
     `create_task`, which is an action, not a fact to report)."""
 
     if name in ("read_supplier",) and "name" in data:
         country = f" ({data['country']})" if data.get("country") else ""
-        return f"Fournisseur {data['name']}{country} — {data.get('product_count', 0)} produit(s) référencé(s)."
+        count = data.get("product_count", 0)
+        return tx(f"Fournisseur {data['name']}{country} — {count} produit(s) référencé(s).", f"Supplier {data['name']}{country} — {count} product(s) listed.")
     if name == "read_customer" and "name" in data:
         country = f" ({data['country']})" if data.get("country") else ""
-        return f"Client {data['name']}{country}."
+        return tx(f"Client {data['name']}{country}.", f"Customer {data['name']}{country}.")
     if name == "read_product" and "name" in data:
         sku = f" ({data['sku']})" if data.get("sku") else ""
-        return f"Produit {data['name']}{sku}, coût unitaire {_fmt_eur(data.get('unit_cost'))}."
+        cost = _fmt_eur(data.get("unit_cost"))
+        return tx(f"Produit {data['name']}{sku}, coût unitaire {cost}.", f"Product {data['name']}{sku}, unit cost {cost}.")
     if name == "analyze_margin":
-        return (
-            f"Marge actuelle : {_fmt_pct(data.get('margin_percentage'))} "
-            f"(coût {_fmt_eur(data.get('cost'))}, revenu {_fmt_eur(data.get('revenue'))})."
-        )
+        margin, cost, revenue = _fmt_pct(data.get("margin_percentage")), _fmt_eur(data.get("cost")), _fmt_eur(data.get("revenue"))
+        return tx(f"Marge actuelle : {margin} (coût {cost}, revenu {revenue}).", f"Current margin: {margin} (cost {cost}, revenue {revenue}).")
     if name == "analyze_supplier_performance":
-        return f"Performance de livraison du fournisseur : {_TREND_LABEL_FR.get(data.get('trend'), data.get('trend'))}."
+        trend = _label(_TREND_LABELS, data.get("trend"))
+        return tx(f"Performance de livraison du fournisseur : {trend}.", f"Supplier delivery performance: {trend}.")
     if name == "analyze_customer_value":
-        return f"Tendance de revenu du client : {_TREND_LABEL_FR.get(data.get('trend'), data.get('trend'))}."
+        trend = _label(_TREND_LABELS, data.get("trend"))
+        return tx(f"Tendance de revenu du client : {trend}.", f"Customer revenue trend: {trend}.")
     if name == "read_transactions" and "transactions" in data:
-        return f"{len(data['transactions'])} transaction(s) récente(s) consultée(s)."
+        n = len(data["transactions"])
+        return tx(f"{n} transaction(s) récente(s) consultée(s).", f"{n} recent transaction(s) reviewed.")
     if name == "get_business_state_snapshot":
         areas = data.get("material_areas") or []
         if not areas:
-            return "Aucun signal significatif détecté dans le périmètre surveillé."
+            return tx("Aucun signal significatif détecté dans le périmètre surveillé.", "No significant signal detected in the monitored scope.")
         titles = " ; ".join(a.get("title", "") for a in areas[:3] if a.get("title"))
-        return f"{len(areas)} signal(aux) détecté(s) : {titles}."
+        return tx(f"{len(areas)} signal(aux) détecté(s) : {titles}.", f"{len(areas)} signal(s) detected: {titles}.")
     if name == "read_object_context" and "object" in data:
         obj = data["object"]
         chain = " → ".join(b["title"].split(" · ")[0] for b in data.get("breadcrumb", []))
@@ -263,11 +289,11 @@ def _summarize_capability_result(name: str, data: dict) -> str | None:
         risks = [s["title"] for s in data.get("intelligence", [])]
         parts = [f"{obj['kind_label']} {obj['title']} ({obj.get('status_label') or obj.get('status') or ''})."]
         if " → " in chain:
-            parts.append(f"Chaîne : {chain}.")
+            parts.append(tx(f"Chaîne : {chain}.", f"Chain: {chain}."))
         if related:
-            parts.append(f"Lié à : {related}.")
+            parts.append(tx(f"Lié à : {related}.", f"Linked to: {related}."))
         if risks:
-            parts.append(f"Signaux ouverts : {' ; '.join(risks[:3])}.")
+            parts.append(tx(f"Signaux ouverts : {' ; '.join(risks[:3])}.", f"Open signals: {'; '.join(risks[:3])}."))
         return " ".join(parts)
     if name == "analyze_document_margin" and "margin" in data:
         return _summarize_margin(data["margin"])
@@ -276,76 +302,82 @@ def _summarize_capability_result(name: str, data: dict) -> str | None:
     if name == "list_priorities":
         priorities = data.get("priorities") or []
         if not priorities:
-            return "Aucune priorité ouverte pour l'instant."
+            return tx("Aucune priorité ouverte pour l'instant.", "No open priority for now.")
         titles = " ; ".join(p.get("title", "") for p in priorities[:3] if p.get("title"))
-        return f"{len(priorities)} priorité(s) : {titles}."
+        return tx(f"{len(priorities)} priorité(s) : {titles}.", f"{len(priorities)} priorit(y/ies): {titles}.")
     return None
 
 
-_COST_BASIS_FR = {
-    "actual": "réelle (tous les coûts sont observés)",
-    "partial": "partiellement réelle (une partie des coûts est encore estimée)",
-    "estimated": "estimée (aucun coût réel encore connu)",
-    "incomplete": "incomplète (au moins un coût est inconnu)",
+_COST_BASIS = {
+    "actual": ("réelle (tous les coûts sont observés)", "actual (all costs are observed)"),
+    "partial": ("partiellement réelle (une partie des coûts est encore estimée)", "partly actual (some costs are still estimated)"),
+    "estimated": ("estimée (aucun coût réel encore connu)", "estimated (no actual cost known yet)"),
+    "incomplete": ("incomplète (au moins un coût est inconnu)", "incomplete (at least one cost is unknown)"),
 }
 
 
 def _range_eur(lo: float, hi: float) -> str:
-    return _fmt_eur(lo) if abs(hi - lo) < 0.5 else f"{_fmt_eur(lo)} à {_fmt_eur(hi)}"
+    return _fmt_eur(lo) if abs(hi - lo) < 0.5 else tx(f"{_fmt_eur(lo)} à {_fmt_eur(hi)}", f"{_fmt_eur(lo)} to {_fmt_eur(hi)}")
 
 
 def _range_pct(lo: float | None, hi: float | None) -> str:
     if lo is None or hi is None:
-        return "taux inconnu"
-    return _fmt_pct(lo) if abs(hi - lo) < 0.0005 else f"{_fmt_pct(lo)} à {_fmt_pct(hi)}"
+        return tx("taux inconnu", "unknown rate")
+    return _fmt_pct(lo) if abs(hi - lo) < 0.0005 else tx(f"{_fmt_pct(lo)} à {_fmt_pct(hi)}", f"{_fmt_pct(lo)} to {_fmt_pct(hi)}")
 
 
 def _summarize_margin(m: dict) -> str:
     current, planned = m["current"], m["planned"]
+    basis = _label(_COST_BASIS, current["cost_basis"])
+    margin_now = f"{_range_eur(current['margin_min'], current['margin_max'])} ({_range_pct(current['margin_pct_min'], current['margin_pct_max'])})"
+    margin_planned = f"{_range_eur(planned['margin_min'], planned['margin_max'])} ({_range_pct(planned['margin_pct_min'], planned['margin_pct_max'])})"
     lines = [
-        f"{m['number']} — marge {_COST_BASIS_FR.get(current['cost_basis'], current['cost_basis'])} : "
-        f"{_range_eur(current['margin_min'], current['margin_max'])} ({_range_pct(current['margin_pct_min'], current['margin_pct_max'])}) "
-        f"sur {_fmt_eur(current['revenue'])} de chiffre d'affaires.",
-        f"Marge prévue au chiffrage : {_range_eur(planned['margin_min'], planned['margin_max'])} "
-        f"({_range_pct(planned['margin_pct_min'], planned['margin_pct_max'])}).",
-    ]
+        tx(f"{m['number']} — marge {basis} : {margin_now} sur {_fmt_eur(current['revenue'])} de chiffre d'affaires.",
+           f"{m['number']} — {basis} margin: {margin_now} on {_fmt_eur(current['revenue'])} of revenue."),
+        tx(f"Marge prévue au chiffrage : {margin_planned}.", f"Margin planned when quoting: {margin_planned}."),
+    ]  # fmt: skip
     if m.get("variances"):
-        lines.append("Principaux écarts : " + " ".join(v["explanation"] for v in m["variances"][:3]))
+        lines.append(tx("Principaux écarts : ", "Main variances: ") + " ".join(v["explanation"] for v in m["variances"][:3]))
     if m.get("missing"):
-        lines.append("Données manquantes : " + " ; ".join(m["missing"][:3]) + ".")
+        lines.append(tx("Données manquantes : ", "Missing data: ") + " ; ".join(m["missing"][:3]) + ".")
     return "\n".join(lines)
 
 
 def _span(measure: dict, unit: str) -> str:
     if measure.get("min") is not None and measure.get("max") is not None:
         if measure["min"] != measure["max"]:
-            return f"{measure['min']:g}–{measure['max']:g} {unit}"
-        return f"{measure['min']:g} {unit}"
-    return f"{measure['value']:g} {unit}" if measure.get("value") is not None else "inconnu"
+            return f"{num(measure['min'], 0)}–{num(measure['max'], 0)} {unit}"
+        return f"{num(measure['min'], 0)} {unit}"
+    return f"{num(measure['value'], 0)} {unit}" if measure.get("value") is not None else tx("inconnu", "unknown")
 
 
 def _summarize_benchmark(b: dict) -> str:
     recommended = next((c for c in b["candidates"] if c["recommended"]), None)
     if recommended is None:
-        return " ".join(b.get("explanation", [])) or "Aucun fournisseur comparable."
-    return (
+        return " ".join(b.get("explanation", [])) or tx("Aucun fournisseur comparable.", "No comparable supplier.")
+    confidence = _label(_CONFIDENCE_LABELS, b["recommendation_confidence"])
+    basis = _label(_BASIS_LABELS, recommended["lead_time_days"]["basis"])
+    total = _span(recommended["total_cost"], "EUR")
+    lead = _span(recommended["lead_time_days"], tx("jours", "days"))
+    head = tx(
         f"Pour {b['product_name']} ({b['quantity']:g} u.), fournisseur recommandé : {recommended['supplier_name']} "
-        f"(score {recommended['score']:.0f}/100, confiance {b['recommendation_confidence']}) — coût total "
-        f"{_span(recommended['total_cost'], 'EUR')}, délai {_span(recommended['lead_time_days'], 'jours')} "
-        f"({recommended['lead_time_days']['basis']}). "
-        + " ".join(b.get("explanation", [])[1:])
-        + f" {len(b['candidates'])} fournisseur(s) comparé(s)."
+        f"(score {recommended['score']:.0f}/100, confiance {confidence}) — coût total {total}, délai {lead} ({basis}). ",
+        f"For {b['product_name']} ({b['quantity']:g} u.), recommended supplier: {recommended['supplier_name']} "
+        f"(score {recommended['score']:.0f}/100, {confidence} confidence) — total cost {total}, lead time {lead} ({basis}). ",
     )
+    n = len(b["candidates"])
+    return head + " ".join(b.get("explanation", [])[1:]) + tx(f" {n} fournisseur(s) comparé(s).", f" {n} supplier(s) compared.")
 
 
 def _deterministic_answer(context: dict) -> str:
-    """A clean, honest French summary built directly from the same
-    structured capability results an LLM would have received -- used only
-    when no real LLM is configured (see app.ai.llm.DeterministicLLMClient),
-    so Ask AI never shows a raw JSON/prompt dump in place of an answer
-    (Step 27). A real LLM, once configured, replaces this with its own
-    free-text synthesis; this is not a second intelligence layer, just this
-    one call's fallback when there is no LLM to call."""
+    """A clean, honest summary in the active language, built directly from
+    the same structured capability results an LLM would have received --
+    used only when no real LLM is configured (see
+    app.ai.llm.DeterministicLLMClient), so Ask AI never shows a raw
+    JSON/prompt dump in place of an answer (Step 27). A real LLM, once
+    configured, replaces this with its own free-text synthesis; this is not
+    a second intelligence layer, just this one call's fallback when there is
+    no LLM to call."""
 
     lines = [
         summary
@@ -353,18 +385,21 @@ def _deterministic_answer(context: dict) -> str:
         if isinstance(data, dict) and (summary := _summarize_capability_result(capability_name, data))
     ]
     if not lines:
-        return (
+        return tx(
             "Les données ont été consultées, mais aucun modèle de langage n'est configuré pour en "
-            "rédiger une synthèse. Consultez la page Finance, Achats ou Ventes correspondante pour le détail complet."
+            "rédiger une synthèse. Consultez la page Finance, Achats ou Ventes correspondante pour le détail complet.",
+            "The data was reviewed, but no language model is configured to write a summary of it. "
+            "See the corresponding Finance, Procurement or Sales page for the full detail.",
         )
     return "\n".join(lines)
 
 
+# The answer's language is added by `_complete` (llm_language()).
 _DEALS_SYSTEM_PROMPT = (
-    "Tu es l'assistant d'un dirigeant de PME. Réponds en français, de façon concise, uniquement à partir des "
-    "données fournies (objets liés, marges, comparaison fournisseurs). Chaque coût porte sa nature "
-    "(observed = réel, declared = annoncé, estimated = estimé, unknown = inconnu) : ne présente JAMAIS une "
-    "estimation comme un fait et cite les fourchettes telles quelles. Si une donnée manque, dis-le."
+    "You are the assistant of an SME executive. Answer concisely, strictly from the data provided "
+    "(linked objects, margins, supplier comparison). Every cost carries its nature "
+    "(observed = actual, declared = announced, estimated = estimated, unknown = unknown): NEVER present an "
+    "estimate as a fact and quote ranges as they are. If a piece of data is missing, say so."
 )
 
 
@@ -377,7 +412,7 @@ class AIOrchestrator:
 
     def ask(self, question: str, *, object_type: str | None = None, object_id: uuid.UUID | None = None) -> AskAIResult:
         if not question or not question.strip():
-            raise OrchestratorError("Question must not be empty.")
+            raise OrchestratorError(tx("La question ne doit pas être vide.", "The question must not be empty."))
 
         if _is_task_creation_request(question):
             return self._handle_action_request(question)
@@ -439,7 +474,7 @@ class AIOrchestrator:
     def _handle_action_request(self, question: str) -> AskAIResult:
         agent = _agent_with_capability("create_task")
         if agent is None:
-            raise OrchestratorError("No agent is currently able to create tasks.")
+            raise OrchestratorError(tx("Aucun agent ne peut actuellement créer de tâche.", "No agent is currently able to create tasks."))
 
         supplier = _resolve_supplier(self.session, question)
         product = _resolve_product(self.session, question)
@@ -447,7 +482,7 @@ class AIOrchestrator:
             supplier = self.session.get(Supplier, product.supplier_id)
 
         if supplier is None and product is None:
-            raise OrchestratorError("Could not identify which supplier or product this question refers to.")
+            raise OrchestratorError(tx("Impossible d'identifier le fournisseur ou le produit visé par cette question.", "Could not identify which supplier or product this question refers to."))
 
         context: dict[str, dict] = {}
         capabilities_used: list[str] = []
@@ -467,8 +502,7 @@ class AIOrchestrator:
             capabilities_used,
             "create_task",
             company_id=company_id,
-            title=f"Review supplier {target_name}" if supplier is not None else f"Review product {target_name}",
-            description=f'Requested via Ask AI: "{question}"',
+            **_review_task_texts(target_name, question, is_supplier=supplier is not None),
             related_entity_type=related_entity_type,
             related_entity_id=related_entity_id,
             correlation_id=uuid.uuid4(),
@@ -564,8 +598,10 @@ class AIOrchestrator:
 
         if not capabilities_used:
             raise OrchestratorError(
-                "None of the relevant agents had a capability that applies to what was resolved "
-                "from this question."
+                tx(
+                    "Aucun des agents concernés ne dispose d'une capacité applicable à ce qui a été identifié dans cette question.",
+                    "None of the relevant agents had a capability that applies to what was resolved from this question.",
+                )
             )
 
         agent_label = ", ".join(sorted({a.name for a in agents}))
@@ -606,9 +642,12 @@ class AIOrchestrator:
         relevant_areas = [a for a in snapshot.get("material_areas", []) if a.get("domain") in matched_domains]
 
         if not relevant_areas:
+            domains = ", ".join(domain_label(d) for d in sorted(matched_domains))
             raise OrchestratorError(
-                "Not enough significant data was found across the relevant business area(s) "
-                f"({', '.join(sorted(matched_domains))}) to answer this yet."
+                tx(
+                    f"Pas encore assez de données significatives dans le(s) domaine(s) concerné(s) ({domains}) pour répondre.",
+                    f"Not enough significant data was found across the relevant business area(s) ({domains}) to answer this yet.",
+                )
             )
 
         # Each area gets its own scratch dict/list for _dispatch_targeted_
@@ -717,9 +756,10 @@ class AIOrchestrator:
         if isinstance(self.llm, DeterministicLLMClient):
             return _deterministic_answer(context)
         try:
+            # Generated in the interface language -- not translated afterwards.
             return self.llm.complete(
-                system_prompt=system_prompt,
+                system_prompt=f"{system_prompt} {llm_language()}",
                 user_prompt=f"Question: {question}\n\nData:\n{json.dumps(context, indent=2)}",
             )
         except Exception as exc:
-            raise OrchestratorError("The language model is currently unavailable. Please try again later.") from exc
+            raise OrchestratorError(tx("Le modèle de langage est indisponible pour le moment. Réessayez plus tard.", "The language model is currently unavailable. Please try again later.")) from exc

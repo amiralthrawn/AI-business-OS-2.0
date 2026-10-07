@@ -59,3 +59,16 @@ compare two complete months that both have transactions (the old hard-coded
 "En hausse" / "Actif" badges were removed). The margin card has no curve
 because no monthly margin series exists. All animations are disabled by
 `prefers-reduced-motion` (globals.css).
+
+## Language and assistant (V2.3)
+
+- **French only** (decision #56): never render an API value raw -- use
+  `valueLabel(group, value)` from `lib/labels.ts`; new interface text is
+  written in French.
+- **Assistant IA** (`components/ai/AssistantDrawer.tsx`): centred in the
+  topbar on every page; opens a side panel below the topbar; sends the page's
+  document/product as context, names the customer/supplier in its
+  suggestions; proposed actions keep the HITL buttons. Animations respect
+  `prefers-reduced-motion`.
+- **Intelligence** (decision #57): `Level` 1 Objet, 2 Analyse & solution,
+  3 Action & résultat; `ActionResult` only shows what tasks really became.

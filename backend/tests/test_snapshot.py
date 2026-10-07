@@ -60,7 +60,9 @@ def test_snapshot_over_the_full_demo_dataset_identifies_material_areas(db_sessio
     assert margin_area.significance.deviation is not None
     assert margin_area.significance.confidence in {"low", "medium", "high"}
 
-    reactive_area = next(a for a in snapshot.areas if "Supplier cost increase" in a.title)
+    from app.intelligence.risks.kinds import SUPPLIER_COST_INCREASE
+
+    reactive_area = next(a for a in snapshot.areas if SUPPLIER_COST_INCREASE.matches(a.title))
     assert reactive_area.significance.impact == "high"
     assert reactive_area.baseline is None  # one-off event, no trend to baseline against
 

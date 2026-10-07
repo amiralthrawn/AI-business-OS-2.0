@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user, require
 from app.access.policy import ACTION_SUBMIT_EMAIL, WRITE_COMMUNICATIONS
 from app.ai.llm import LLMClient, get_llm_client
@@ -35,7 +36,7 @@ class DraftUpdateIn(BaseModel):
 def _get(db: Session, company: Company, communication_id: uuid.UUID) -> Communication:
     communication = db.get(Communication, communication_id)
     if communication is None or communication.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Message introuvable")
+        raise HTTPException(status_code=404, detail=tx("Message introuvable", "Message not found"))
     return communication
 
 
@@ -54,7 +55,7 @@ def list_communications(box: str = "inbox", channel: str | None = None, db: Sess
 
 @router.get("/communications/purposes")
 def purposes() -> dict:
-    return service.PURPOSE_LABELS
+    return service.purpose_labels()
 
 
 # Read-only views (brain/communications.md "Boîtes fonctionnelles"): declared
@@ -67,7 +68,7 @@ def mailboxes(db: Session = Depends(get_db), company: Company = Depends(current_
 @router.get("/communications/mailboxes/{key}")
 def mailbox_messages(key: str, db: Session = Depends(get_db), company: Company = Depends(current_company)) -> list[dict]:
     if key not in mailbox_views.MAILBOX_KEYS:
-        raise HTTPException(status_code=404, detail="Boîte inconnue")
+        raise HTTPException(status_code=404, detail=tx("Boîte inconnue", "Unknown mailbox"))
     return mailbox_views.list_mailbox(db, company.id, key)
 
 
@@ -139,6 +140,6 @@ def submit(
 def follow_ups(db: Session = Depends(get_db), company: Company = Depends(current_company), user: CurrentUser = Depends(get_current_user)) -> dict:
     return {
         "computed_at_read_time": True,
-        "note": "Calculé à l'ouverture de la page : aucun planificateur n'envoie de relance automatiquement.",
+        "note": tx("Calculé à l'ouverture de la page : aucun planificateur n'envoie de relance automatiquement.", "Computed when the page opens: no scheduler sends follow-ups automatically."),
         "items": service.list_follow_ups(db, company.id),
     }

@@ -20,6 +20,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import text_of
 from app.core.entities import (
     Communication,
     Contact,
@@ -139,17 +140,17 @@ def get_entity_context(session: Session, entity_type: RelatedEntityType, entity_
         context["transactions"] = _transaction_summaries(session, customer_id=entity_id)
 
     context["open_risks"] = [
-        {"id": r.id, "title": r.title, "severity": r.severity.value}
+        {"id": r.id, "title": text_of(r, "title"), "severity": r.severity.value}
         for r in _linked(session, Risk, entity_type, entity_id)
         if r.status == RiskStatus.OPEN
     ]
     context["open_opportunities"] = [
-        {"id": o.id, "title": o.title}
+        {"id": o.id, "title": text_of(o, "title")}
         for o in _linked(session, Opportunity, entity_type, entity_id)
         if o.status == OpportunityStatus.OPEN
     ]
     context["tasks"] = [
-        {"id": t.id, "title": t.title, "status": t.status.value}
+        {"id": t.id, "title": text_of(t, "title"), "status": t.status.value}
         for t in _linked(session, Task, entity_type, entity_id)
     ]
     context["documents"] = [

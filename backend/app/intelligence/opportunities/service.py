@@ -2,6 +2,8 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, money, pct, tx
+from app.intelligence.risks.kinds import GROWING_CUSTOMER
 from app.core.analytics import compute_customer_value_trend
 from app.core.entities import Customer, Opportunity, OpportunityStatus, RelatedEntityType
 from app.core.events.bus import EventBus
@@ -53,14 +55,24 @@ class OpportunityDetectionService:
         )
         self.event_bus.publish(signal_event)
 
+        texts = both(
+            lambda: {
+                "title": GROWING_CUSTOMER.title(customer.name),
+                "description": tx(
+                    f"Le chiffre d'affaires de {customer.name} a augmenté de {pct(trend.variation_pct)} "
+                    f"(de {money(trend.baseline_revenue, 0)} à {money(trend.recent_revenue, 0)}). "
+                    "Piste : développer cette relation.",
+                    f"Revenue from {customer.name} grew by {pct(trend.variation_pct)} "
+                    f"(from {money(trend.baseline_revenue, 0)} to {money(trend.recent_revenue, 0)}). "
+                    "Lead: develop this relationship.",
+                ),
+            }
+        )
         opportunity = Opportunity(
             company_id=customer.company_id,
-            title=f"Growing customer: {customer.name}",
-            description=(
-                f"Revenue from {customer.name} increased {trend.variation_pct:.1%} "
-                f"(from {trend.baseline_revenue:.0f} to {trend.recent_revenue:.0f}). "
-                "Consider expanding this relationship."
-            ),
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             status=OpportunityStatus.OPEN,
             related_entity_type=RelatedEntityType.CUSTOMER,
             related_entity_id=customer_id,

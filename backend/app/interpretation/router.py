@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.ai.capabilities import capability_registry
 from app.ai.llm import LLMClient, get_llm_client
 from app.core.entities import Company
@@ -24,6 +25,6 @@ def trigger_interpretation_sweep(
 
     company = db.query(Company).first()
     if company is None:
-        raise HTTPException(status_code=404, detail="No company configured yet")
+        raise HTTPException(status_code=404, detail=tx("Aucune entreprise n'est encore configurée", "No company is configured yet"))
 
     return run_interpretation_sweep(db, event_bus, capability_registry, llm, company.id)

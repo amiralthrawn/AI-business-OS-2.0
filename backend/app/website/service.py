@@ -13,6 +13,7 @@ Every run records its mode: "real" (the company's site was fetched) or
 """
 
 import time
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from urllib.parse import urljoin, urlparse
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, tx
 from app.actions.service import ActionsService
 from app.ai.llm import DeterministicLLMClient, LLMClient
 from app.core.entities import AIRun, Company, RelatedEntityType, Task, TaskStatus, WebsiteChangeProposal
@@ -155,34 +157,86 @@ def _issue(code: str, severity: str, what: str, why: str, change: str) -> dict:
 def _analyse(page: PageReport, duplicate_titles: set[str]) -> list[dict]:
     issues = []
     if page.status >= 400:
-        return [_issue("http_error", "high", f"La page répond {page.status}.", "Une page en erreur n'est ni indexée ni utile aux visiteurs.", "Corriger ou rediriger l'URL.")]
+        return [_issue("http_error", "high", tx(f"La page répond {page.status}.", f"The page returns {page.status}."), tx("Une page en erreur n'est ni indexée ni utile aux visiteurs.", "A page in error is neither indexed nor useful to visitors."), tx("Corriger ou rediriger l'URL.", "Fix or redirect the URL."))]
     t = page.title or ""
     if not t:
-        issues.append(_issue("title_missing", "high", "Titre absent.", "Le titre est le premier élément affiché par les moteurs de recherche.", "Ajouter un titre de 30 à 60 caractères décrivant la page."))
+        issues.append(_issue("title_missing", "high", tx("Titre absent.", "Missing title."), tx("Le titre est le premier élément affiché par les moteurs de recherche.", "The title is the first thing search engines display."), tx("Ajouter un titre de 30 à 60 caractères décrivant la page.", "Add a 30–60 character title describing the page.")))
     elif len(t) < 30:
-        issues.append(_issue("title_short", "medium", f"Titre trop court ({len(t)} car.) : « {t} ».", "Un titre vague ne dit ni le sujet ni l'offre.", "Allonger le titre avec le sujet précis et la marque."))
+        issues.append(_issue("title_short", "medium", tx(f"Titre trop court ({len(t)} car.) : « {t} ».", f'Title too short ({len(t)} chars): "{t}".'), tx("Un titre vague ne dit ni le sujet ni l'offre.", "A vague title says neither the subject nor the offer."), tx("Allonger le titre avec le sujet précis et la marque.", "Lengthen the title with the precise subject and the brand.")))
     elif len(t) > 60:
-        issues.append(_issue("title_long", "low", f"Titre trop long ({len(t)} car.).", "Au-delà de ~60 caractères, le titre est tronqué dans les résultats.", "Raccourcir en gardant les mots importants au début."))
+        issues.append(_issue("title_long", "low", tx(f"Titre trop long ({len(t)} car.).", f"Title too long ({len(t)} chars)."), tx("Au-delà de ~60 caractères, le titre est tronqué dans les résultats.", "Beyond ~60 characters, the title is cut off in the results."), tx("Raccourcir en gardant les mots importants au début.", "Shorten it, keeping the important words first.")))
     if t and t in duplicate_titles:
-        issues.append(_issue("title_duplicate", "medium", f"Titre identique à une autre page : « {t} ».", "Deux pages au même titre se concurrencent et sont mal distinguées.", "Donner à chaque page un titre unique."))
+        issues.append(_issue("title_duplicate", "medium", tx(f"Titre identique à une autre page : « {t} ».", f'Same title as another page: "{t}".'), tx("Deux pages au même titre se concurrencent et sont mal distinguées.", "Two pages with the same title compete and are hard to tell apart."), tx("Donner à chaque page un titre unique.", "Give each page a unique title.")))
     d = page.meta_description or ""
     if not d:
-        issues.append(_issue("meta_missing", "medium", "Méta-description absente.", "Le moteur choisit alors un extrait au hasard, souvent peu engageant.", "Rédiger 70 à 160 caractères résumant la page et incitant au clic."))
+        issues.append(_issue("meta_missing", "medium", tx("Méta-description absente.", "Missing meta description."), tx("Le moteur choisit alors un extrait au hasard, souvent peu engageant.", "The search engine then picks a random excerpt, often unappealing."), tx("Rédiger 70 à 160 caractères résumant la page et incitant au clic.", "Write 70–160 characters summarising the page and inviting the click.")))
     elif len(d) < 70:
-        issues.append(_issue("meta_short", "low", f"Méta-description trop courte ({len(d)} car.).", "Un résumé trop court exploite mal l'espace affiché.", "L'enrichir (70–160 caractères)."))
+        issues.append(_issue("meta_short", "low", tx(f"Méta-description trop courte ({len(d)} car.).", f"Meta description too short ({len(d)} chars)."), tx("Un résumé trop court exploite mal l'espace affiché.", "A summary that is too short wastes the space displayed."), tx("L'enrichir (70–160 caractères).", "Expand it (70–160 characters).")))
     if not page.h1:
-        issues.append(_issue("h1_missing", "medium", "Aucun titre H1.", "Le H1 indique le sujet principal de la page.", "Ajouter un H1 unique."))
+        issues.append(_issue("h1_missing", "medium", tx("Aucun titre H1.", "No H1 heading."), tx("Le H1 indique le sujet principal de la page.", "The H1 states the main subject of the page."), tx("Ajouter un H1 unique.", "Add a single H1.")))
     elif len(page.h1) > 1:
-        issues.append(_issue("h1_multiple", "low", f"{len(page.h1)} titres H1.", "Plusieurs H1 brouillent la hiérarchie du contenu.", "Garder un seul H1, passer les autres en H2."))
+        issues.append(_issue("h1_multiple", "low", tx(f"{len(page.h1)} titres H1.", f"{len(page.h1)} H1 headings."), tx("Plusieurs H1 brouillent la hiérarchie du contenu.", "Several H1s blur the content hierarchy."), tx("Garder un seul H1, passer les autres en H2.", "Keep a single H1, turn the others into H2s.")))
     if page.images_without_alt:
-        issues.append(_issue("img_alt", "low", f"{page.images_without_alt} image(s) sans texte alternatif.", "Accessibilité et référencement des images.", "Décrire chaque image dans l'attribut alt."))
+        issues.append(_issue("img_alt", "low", tx(f"{page.images_without_alt} image(s) sans texte alternatif.", f"{page.images_without_alt} image(s) without alt text."), tx("Accessibilité et référencement des images.", "Image accessibility and SEO."), tx("Décrire chaque image dans l'attribut alt.", "Describe each image in the alt attribute.")))
     if not page.lang:
-        issues.append(_issue("lang_missing", "low", "Langue de la page non déclarée.", "Les moteurs et lecteurs d'écran s'appuient sur la langue déclarée.", 'Ajouter lang="fr" sur la balise html.'))
+        issues.append(_issue("lang_missing", "low", tx("Langue de la page non déclarée.", "Page language not declared."), tx("Les moteurs et lecteurs d'écran s'appuient sur la langue déclarée.", "Search engines and screen readers rely on the declared language."), tx('Ajouter lang="fr" sur la balise html.', 'Add lang="fr" to the html tag.')))
     if page.words < 60:
-        issues.append(_issue("thin_content", "medium", f"Contenu très court ({page.words} mots).", "Une page quasi vide a peu de chances d'être bien positionnée.", "Ajouter un contenu utile décrivant l'offre."))
+        issues.append(_issue("thin_content", "medium", tx(f"Contenu très court ({page.words} mots).", f"Very short content ({page.words} words)."), tx("Une page quasi vide a peu de chances d'être bien positionnée.", "A nearly empty page is unlikely to rank well."), tx("Ajouter un contenu utile décrivant l'offre.", "Add useful content describing the offer.")))
     if page.seconds > 1.5:
-        issues.append(_issue("slow", "medium", f"Réponse lente ({page.seconds:.1f} s).", "La lenteur dégrade l'expérience et le référencement.", "Alléger les images, activer le cache/compression."))
+        issues.append(_issue("slow", "medium", tx(f"Réponse lente ({page.seconds:.1f} s).", f"Slow response ({page.seconds:.1f} s)."), tx("La lenteur dégrade l'expérience et le référencement.", "Slowness hurts both the experience and SEO."), tx("Alléger les images, activer le cache/compression.", "Lighten images, enable caching/compression.")))
     return issues
+
+
+RATIONALES: dict[str, str] = {  # French (stored) -> English
+    "Titre unique, 30–60 caractères, sujet de la page d'abord puis la marque.": "Unique title, 30–60 characters, page subject first, then the brand.",
+    "Résumé de 70–160 caractères avec le sujet et une incitation à l'action.": "70–160 character summary with the subject and a call to action.",
+    "Un seul H1 (le premier) ; les autres deviennent des H2.": "A single H1 (the first one); the others become H2s.",
+}
+
+
+def display_rationale(stored: str) -> str:
+    return tx(stored, RATIONALES[stored]) if stored in RATIONALES else stored
+
+
+# Steps of a run are stored as written (French); rendered on read.
+STEP_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^Site joint : (?P<a>.+)$"), "Site reached: {a}"),
+    (re.compile(r"^Site (?P<a>\S+) injoignable \(HTTP (?P<b>\d+)\)$"), "Site {a} unreachable (HTTP {b})"),
+    (re.compile(r"^Site (?P<a>\S+) injoignable$"), "Site {a} unreachable"),
+    (re.compile(r"^Analyse du site de démonstration à la place\.$"), "Analysing the demo site instead."),
+    (re.compile(r"^(?P<a>\w+) — analyse du site de démonstration à la place\.$"), "{a} — analysing the demo site instead."),
+    (re.compile(r"^Aucun site configuré$"), "No website configured"),
+    (re.compile(r"^Analyse du site de démonstration intégré \(simulation\)\.$"), "Analysis of the built-in demo site (simulation)."),
+    (re.compile(r"^robots\.txt interdit l'exploration$"), "robots.txt forbids crawling"),
+    (re.compile(r"^Exploration des pages$"), "Crawling the pages"),
+    (re.compile(r"^(?P<a>\d+) page\(s\) analysée\(s\) \(maximum (?P<b>\d+)\)$"), "{a} page(s) analysed (maximum {b})"),
+    (re.compile(r"^Métadonnées, titres et contenus analysés$"), "Metadata, titles and content analysed"),
+    (re.compile(r"^Performance mesurée$"), "Performance measured"),
+    (re.compile(r"^temps de réponse moyen (?P<a>[\d.]+) s$"), "average response time {a} s"),
+    (re.compile(r"^(?P<a>\d+) problème\(s\) détecté\(s\)$"), "{a} issue(s) found"),
+    (re.compile(r"^(?P<a>\d+) modification\(s\) proposée\(s\)$"), "{a} change(s) proposed"),
+    (re.compile(r"^Soumises à validation avant toute application\.$"), "Submitted for approval before anything is applied."),
+]
+
+
+def localized_result(result: dict | None) -> dict | None:
+    """The stored audit result with its issues re-written in the active
+    language from the stored pages (the analysis is deterministic)."""
+
+    if not result or "pages" not in result:
+        return result
+    pages = [PageReport(**{k: v for k, v in page.items() if k != "issues"}) for page in result["pages"]]
+    titles = [p.title for p in pages if p.title]
+    duplicates = {t for t in titles if titles.count(t) > 1}
+    severity = {"high": 0, "medium": 1, "low": 2}
+    for page in pages:
+        page.issues = _analyse(page, duplicates)
+    issues = [i | {"url": p.url} for p in pages for i in p.issues]
+    return result | {
+        "pages": [p.__dict__ for p in pages],
+        "issues": sorted(issues, key=lambda i: severity[i["severity"]]),
+        "score_note": tx("Pas de score unique : les problèmes sont listés par gravité.", "No single score: issues are listed by severity."),
+    }
 
 
 def _propose(page: PageReport, company_name: str, llm: LLMClient | None) -> list[tuple[str, str | None, str, str]]:
@@ -209,7 +263,8 @@ def _propose(page: PageReport, company_name: str, llm: LLMClient | None) -> list
         polished = []
         for field_name, current, proposed, rationale in proposals:
             try:
-                text = llm.complete(system_prompt="Reformule ce texte SEO en français, même sens, sans ajouter d'information, même longueur maximale. Réponds uniquement par le texte.", user_prompt=proposed).strip()
+                # The proposed text is website content: kept in the site's own language.
+                text = llm.complete(system_prompt="Reformule ce texte SEO dans sa propre langue, même sens, sans ajouter d'information, même longueur maximale. Réponds uniquement par le texte.", user_prompt=proposed).strip()
                 polished.append((field_name, current, text or proposed, rationale))
             except Exception:
                 polished.append((field_name, current, proposed, rationale))
@@ -322,10 +377,17 @@ def audit_website(session: Session, event_bus: EventBus | None, company: Company
 def submit_proposal(session: Session, event_bus: EventBus, proposal: WebsiteChangeProposal) -> Task:
     if proposal.status not in {"proposed", "rejected"}:
         raise WebsiteError("Proposition déjà soumise ou traitée")
+    path = urlparse(proposal.page_url).path or "/"
+    texts = both(lambda: {
+        "title": tx(f"Modifier le site — {proposal.field} de {path}", f"Change the website — {proposal.field} of {path}"),
+        "description": tx(f"Actuel : {proposal.current_value or '(vide)'}\nProposé : {proposal.proposed_value}", f"Current: {proposal.current_value or '(empty)'}\nProposed: {proposal.proposed_value}")
+        + f"\n\n{proposal.rationale}",
+    })  # fmt: skip
     task = ActionsService(session, event_bus).propose_task(
         company_id=proposal.company_id,
-        title=f"Modifier le site — {proposal.field} de {urlparse(proposal.page_url).path or '/'}",
-        description=f"Actuel : {proposal.current_value or '(vide)'}\nProposé : {proposal.proposed_value}\n\n{proposal.rationale}",
+        title=texts["fr"]["title"],
+        description=texts["fr"]["description"],
+        i18n=texts,
         related_entity_type=RelatedEntityType.COMPANY,
         related_entity_id=proposal.company_id,
         pending_action=APPLY_ACTION,

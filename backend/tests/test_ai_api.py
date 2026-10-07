@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.ai.llm import DETERMINISTIC_MARKER
 from app.ai.llm import DeterministicLLMClient, get_llm_client
 from app.core.entities import Company, Product, Supplier
 from app.database import get_db
@@ -47,7 +48,7 @@ def test_ask_ai_endpoint_answers_a_procurement_question(db_session):
     # never be a raw JSON/prompt dump, even without a real LLM configured.
     assert "Context:" not in body["answer"]
     assert "{" not in body["answer"]
-    assert "deterministic answer" not in body["answer"]
+    assert DETERMINISTIC_MARKER not in body["answer"]
     assert "Northline Steel" in body["answer"]
 
 

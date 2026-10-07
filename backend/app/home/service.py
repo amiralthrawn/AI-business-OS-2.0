@@ -18,7 +18,8 @@ from app.core.entities import (
     TaskStatus,
     Transaction,
 )
-from app.core.observable_labels import OBSERVABLE_LABEL_FR
+from app.core.i18n import text_of, tx
+from app.core.observable_labels import observable_label
 
 DEFAULT_RECENT_LIMIT = 5
 DEFAULT_RECENT_EVENTS_LIMIT = 10
@@ -34,18 +35,18 @@ DEFAULT_NARRATIVE_LIMIT = 10
 # RiskCreated/OpportunityCreated/etc., which describe the exact same
 # phenomena a second time; see brain/decisions.md #19). Never shows a raw
 # event_type or payload to a caller -- every entry is translated to a short
-# French sentence, honestly distinguishing "the OS analyzed/proposed
+# sentence in the active language, honestly distinguishing "the OS analyzed/proposed
 # something" from "a human actually approved/rejected it" (see brain's Step
 # 27 notes) -- nothing here claims an external action (an email sent, a
 # meeting confirmed) that was not actually executed.
-_ACTIVITY_LABEL_FR = {
-    "ObservationDetected": "Analyse effectuée",
-    "EventInterpreted": "Analyse approfondie effectuée",
-    "DecisionProposed": "Recommandation générée",
-    "TaskCreated": "Tâche proposée",
-    "ActionApproved": "Action validée",
-    "ActionRejected": "Action rejetée",
-    "ActionExecuted": "Action exécutée",
+_ACTIVITY_LABELS = {
+    "ObservationDetected": ("Analyse effectuée", "Analysis performed"),
+    "EventInterpreted": ("Analyse approfondie effectuée", "In-depth analysis performed"),
+    "DecisionProposed": ("Recommandation générée", "Recommendation generated"),
+    "TaskCreated": ("Tâche proposée", "Task proposed"),
+    "ActionApproved": ("Action validée", "Action approved"),
+    "ActionRejected": ("Action rejetée", "Action rejected"),
+    "ActionExecuted": ("Action exécutée", "Action executed"),
 }
 _NARRATIVE_ENTITY_MODELS = {
     RelatedEntityType.SUPPLIER: Supplier,
@@ -143,8 +144,8 @@ class HomeService:
                 {
                     "kind": "risk",
                     "id": risk.id,
-                    "title": risk.title,
-                    "description": risk.description,
+                    "title": text_of(risk, "title"),
+                    "description": text_of(risk, "description"),
                     "severity": risk.severity.value,
                     "related_entity_type": risk.related_entity_type,
                     "related_entity_id": risk.related_entity_id,
@@ -158,8 +159,8 @@ class HomeService:
                 {
                     "kind": "opportunity",
                     "id": opportunity.id,
-                    "title": opportunity.title,
-                    "description": opportunity.description,
+                    "title": text_of(opportunity, "title"),
+                    "description": text_of(opportunity, "description"),
                     "severity": None,
                     "related_entity_type": opportunity.related_entity_type,
                     "related_entity_id": opportunity.related_entity_id,
@@ -255,7 +256,7 @@ class HomeService:
         # Local import for the same circular-import reason as build_snapshot
         # above: app.decision.engine's own context assembly transitively
         # imports app.snapshot.service, which imports HomeService.
-        from app.decision.engine import DECISION_PROPOSED
+        from app.decision.engine import DECISION_PROPOSED, localize_decision
 
         entries = (
             self.session.query(EventLogEntry)
@@ -264,52 +265,57 @@ class HomeService:
             .limit(limit)
             .all()
         )
+        payloads = [(entry, localize_decision(entry.payload)) for entry in entries]
         return [
             {
-                "type": entry.payload.get("type"),
-                "problem": entry.payload.get("problem"),
-                "domain": entry.payload.get("domain"),
-                "entity_type": entry.payload.get("entity_type"),
-                "entity_id": entry.payload.get("entity_id"),
-                "options": entry.payload.get("options", []),
-                "recommendation": entry.payload.get("recommendation"),
-                "confidence": entry.payload.get("confidence"),
+                "type": payload.get("type"),
+                "problem": payload.get("problem"),
+                "domain": payload.get("domain"),
+                "entity_type": payload.get("entity_type"),
+                "entity_id": payload.get("entity_id"),
+                "options": payload.get("options", []),
+                "recommendation": payload.get("recommendation"),
+                "confidence": payload.get("confidence"),
                 "occurred_at": entry.occurred_at,
             }
-            for entry in entries
+            for entry, payload in payloads
         ]
 
     def _describe_activity_entry(self, entry: EventLogEntry) -> tuple[str | None, str] | None:
         """Returns (domain, detail) in business language for one Event Log
         entry, or `None` when it isn't one of the event types this feed
-        narrates (see `_ACTIVITY_LABEL_FR`) or its Task no longer resolves."""
+        narrates (see `_ACTIVITY_LABELS`) or its Task no longer resolves."""
 
         payload = entry.payload
 
         if entry.event_type == "ObservationDetected":
-            label = OBSERVABLE_LABEL_FR.get(payload.get("observable"), payload.get("observable") or "")
+            label = observable_label(payload.get("observable"))
             entity_name = payload.get("entity_name") or ""
             return payload.get("domain"), f"{label} — {entity_name}".strip(" —")
 
         if entry.event_type == "EventInterpreted":
-            return payload.get("domain"), payload.get("title") or ""
+            from app.interpretation.engine import localize_interpretation
+
+            return payload.get("domain"), localize_interpretation(payload).get("title") or ""
 
         if entry.event_type == "DecisionProposed":
-            return payload.get("domain"), payload.get("problem") or ""
+            from app.decision.engine import localize_decision
+
+            return payload.get("domain"), localize_decision(payload).get("problem") or ""
 
         if entry.event_type in ("TaskCreated", "ActionApproved", "ActionRejected", "ActionExecuted"):
             task_id = payload.get("task_id")
             task = self.session.get(Task, uuid.UUID(task_id)) if task_id else None
             if task is None:
                 return None
-            return None, task.title
+            return None, text_of(task, "title")
 
         return None
 
     def get_os_activity(self, limit: int = DEFAULT_ACTIVITY_LIMIT, domain: str | None = None) -> list[dict]:
         """"What has the OS actually done recently?" -- re-hydrated from the
         real Event Log, most recent first, each entry translated into a
-        short French business sentence (never a raw event_type or payload).
+        short business sentence in the active language (never a raw event_type or payload).
         `domain` filters to entries that resolved one (finance/procurement/
         sales); entries with no resolvable domain (Task/Action events) are
         only included when no filter is active."""
@@ -334,7 +340,7 @@ class HomeService:
                 {
                     "event_type": entry.event_type,
                     "domain": entry_domain,
-                    "label": _ACTIVITY_LABEL_FR.get(entry.event_type, entry.event_type),
+                    "label": tx(*_ACTIVITY_LABELS[entry.event_type]),
                     "detail": detail,
                     "occurred_at": entry.occurred_at,
                 }
@@ -356,12 +362,17 @@ class HomeService:
         concept, see brain's Step 27 notes) and `channel="website"` (raw
         inbound inquiries, already surfaced through the Sales domain's own
         signals; too frequent and unfiltered to belong in a curated
-        narrative feed)."""
+        narrative feed). Only messages that really happened: a draft (or one
+        awaiting validation, or rejected) was never sent, so its body -- often
+        a template with placeholders -- is not part of the company's story.
+        The subject and body are source data, returned untranslated; the
+        interface frames them in its own language."""
 
         comms = (
             self.session.query(Communication)
             .filter_by(company_id=company_id)
             .filter(Communication.channel.in_(("email", "internal")))
+            .filter(Communication.status.in_(("received", "sent")))
             .order_by(Communication.occurred_at.desc())
             .limit(limit)
             .all()

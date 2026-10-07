@@ -1,16 +1,11 @@
-"use client";
-
 import Link from "next/link";
-import { useState } from "react";
-import CreateTaskButton from "@/components/actions/CreateTaskButton";
+import { ActionResult } from "@/components/intelligence/AnalysisLevels";
+import DecisionOptions from "@/components/intelligence/DecisionOptions";
 import Badge, { type BadgeTone } from "@/components/ui/Badge";
 import Card from "@/components/ui/Card";
+import { valueLabel } from "@/lib/labels";
 import { entityHref } from "@/lib/related-entity";
-import type { DecisionSummary } from "@/lib/types";
-
-const CONFIDENCE_LABEL: Record<string, string> = { low: "faible", medium: "moyenne", high: "élevée" };
-const DOMAIN_LABEL: Record<string, string> = { finance: "Finance", procurement: "Achats", sales: "Ventes" };
-const TYPE_LABEL: Record<string, string> = { risk: "Risque", opportunity: "Opportunité", insight: "Insight", observation: "Observation" };
+import type { DecisionSummary, TaskRead } from "@/lib/types";
 
 function confidenceTone(confidence: string): BadgeTone {
   if (confidence === "high") return "success";
@@ -18,103 +13,72 @@ function confidenceTone(confidence: string): BadgeTone {
   return "neutral";
 }
 
-// One `DecisionProposed` Event Log entry, re-hydrated as-is by
-// HomeService.get_decisions -- shared by Home and Decision Intelligence.
-// Each option is a real, clickable widget (Step 28): selecting one reveals
-// its own reasoning and offers a real "Créer une tâche" action tied to it
-// -- no fake "choose an option" persistence is invented (the backend has
-// none), the interactivity is honest about what it does.
-export default function DecisionCard({ decision }: { decision: DecisionSummary }) {
-  const [openOption, setOpenOption] = useState<number | null>(null);
+const STEP = "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold";
+
+// One `DecisionProposed` Event Log entry (HomeService.get_decisions), read in
+// three levels: OBJET (what is happening) -> ANALYSE & SOLUTION (why it
+// matters, what the OS recommends, the options and their trade-offs) ->
+// ACTION & RÉSULTAT (turn an option into a real task; the result shown is
+// only what the tasks attached to the subject really became).
+export default function DecisionCard({ decision, tasks = [] }: { decision: DecisionSummary; tasks?: TaskRead[] }) {
   const href = decision.entity_type && decision.entity_id ? entityHref(decision.entity_type, decision.entity_id) : null;
+  const hasOptions = decision.options.length > 0;
 
   return (
-    <Card className="p-6">
-      <div className="flex items-start justify-between gap-3">
+    <Card className="space-y-5 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge label={TYPE_LABEL[decision.type] ?? decision.type} tone="accent" />
-          <Badge label={DOMAIN_LABEL[decision.domain] ?? decision.domain} tone="neutral" />
-          <Badge label={`confiance ${CONFIDENCE_LABEL[decision.confidence] ?? decision.confidence}`} tone={confidenceTone(decision.confidence)} />
+          <Badge label={valueLabel("signal", decision.type)} tone="accent" />
+          <Badge label={valueLabel("domain", decision.domain)} tone="neutral" />
+          <Badge label={`confiance ${valueLabel("confidence", decision.confidence)}`} tone={confidenceTone(decision.confidence)} />
         </div>
-        <span className="shrink-0 text-[11.5px] text-text-faint">{new Date(decision.occurred_at).toLocaleDateString("fr-FR")}</span>
+        <span className="num text-[11.5px] text-text-faint">{new Date(decision.occurred_at).toLocaleDateString("fr-FR")}</span>
       </div>
 
-      <p className="mt-3 font-semibold text-[15px] text-text">{decision.problem}</p>
-
-      {decision.recommendation.reasoning && (
-        <div className="mt-2.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-text-faint">Pourquoi</p>
-          <p className="mt-1 text-[13px] text-text-soft">{decision.recommendation.reasoning}</p>
+      <div className="flex gap-3">
+        <span className={`${STEP} bg-accent text-white`}>1</span>
+        <div className="min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-text-faint">Objet — ce qui se passe</p>
+          <p className="mt-1 text-[15px] font-semibold text-text">{decision.problem}</p>
+          {href && (
+            <Link href={href} className="mt-1 inline-block text-[12.5px] font-medium text-accent-strong hover:underline">
+              Voir la fiche {valueLabel("entity", decision.entity_type)} →
+            </Link>
+          )}
         </div>
-      )}
+      </div>
 
-      {href && (
-        <Link href={href} className="mt-2.5 inline-block text-[12.5px] font-medium text-accent-strong hover:underline">
-          Voir l&rsquo;entité concernée →
-        </Link>
-      )}
+      <div className="flex gap-3">
+        <span className={`${STEP} bg-accent text-white`}>2</span>
+        <div className="min-w-0 flex-1 space-y-2.5">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-text-faint">Analyse &amp; solution — pourquoi c&rsquo;est important</p>
+          {decision.recommendation.reasoning ? (
+            <p className="text-[13px] leading-relaxed text-text-soft">{decision.recommendation.reasoning}</p>
+          ) : (
+            <p className="text-[13px] text-text-faint">Pas d&rsquo;analyse détaillée disponible.</p>
+          )}
+          <p className="text-[13px] text-text">
+            <span className="font-semibold">Ce que l&rsquo;OS recommande&nbsp;: </span>
+            {decision.recommendation.chosen_option ?? "pas assez d'information pour recommander une action — la situation reste à surveiller."}
+          </p>
+        </div>
+      </div>
 
-      {decision.options.length > 0 ? (
-        <div className="mt-4">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Options</p>
-          <div className="space-y-2">
-            {decision.options.map((option, i) => {
-              const isOpen = openOption === i;
-              const isRecommended = decision.recommendation.chosen_option?.includes(option.label);
-              return (
-                <div key={i} className={`rounded-xl border-[1.5px] transition-colors ${isOpen ? "border-accent" : "border-border-strong"}`}>
-                  <button
-                    type="button"
-                    onClick={() => setOpenOption(isOpen ? null : i)}
-                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors ${
-                      isOpen ? "bg-accent-soft" : "hover:bg-surface-sunken"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2 text-[13.5px] font-semibold text-text">
-                      {option.label}
-                      {isRecommended && <Badge label="recommandée" tone="success" />}
-                    </span>
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className={`shrink-0 text-text-faint transition-transform ${isOpen ? "rotate-180" : ""}`}
-                    >
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </button>
-                  {isOpen && (
-                    <div className="animate-reveal space-y-2.5 border-t border-border px-4 py-3.5">
-                      <p className="text-[12.5px] text-text-soft">
-                        <span className="font-semibold text-text">Bénéfice attendu&nbsp;: </span>
-                        {option.expected_benefit}
-                      </p>
-                      {option.trade_offs && (
-                        <p className="text-[12.5px] text-text-faint">
-                          <span className="font-semibold text-text-soft">Compromis&nbsp;: </span>
-                          {option.trade_offs}
-                        </p>
-                      )}
-                      <CreateTaskButton
-                        defaultTitle={option.label}
-                        relatedEntityType={decision.entity_type ?? undefined}
-                        relatedEntityId={decision.entity_id ?? undefined}
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+      <div className="flex gap-3">
+        <span className={`${STEP} bg-text text-surface`}>3</span>
+        <div className="min-w-0 flex-1 space-y-2.5">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-text-faint">Action &amp; résultat — ce que vous pouvez faire</p>
+          {hasOptions ? (
+            <DecisionOptions options={decision.options} chosen={decision.recommendation.chosen_option} entityType={decision.entity_type} entityId={decision.entity_id} />
+          ) : (
+            <p className="text-[12.5px] text-text-faint">Aucune option d&rsquo;action proposée pour l&rsquo;instant.</p>
+          )}
+          <div>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-faint">Résultat</p>
+            <ActionResult tasks={tasks} />
           </div>
         </div>
-      ) : (
-        <p className="mt-3 text-[13px] text-text-soft">{decision.recommendation.chosen_option ?? "Pas assez d'information pour recommander une action pour l'instant."}</p>
-      )}
+      </div>
     </Card>
   );
 }

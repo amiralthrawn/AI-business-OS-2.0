@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user, require
 from app.access.policy import WRITE_CATALOG
 from app.catalog import service
@@ -74,7 +75,7 @@ class StockIn(BaseModel):
 def _product(db: Session, company: Company, product_id: uuid.UUID) -> Product:
     product = db.get(Product, product_id)
     if product is None or product.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Produit introuvable")
+        raise HTTPException(status_code=404, detail=tx("Produit introuvable", "Product not found"))
     return product
 
 

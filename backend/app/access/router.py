@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user
-from app.access.policy import ACCESS_CATALOG, ALL_PERMISSIONS, ROLE_LABELS_FR, WRITE_SETTINGS, effective_permissions, role_defaults
+from app.access.policy import ACCESS_CATALOG, ALL_PERMISSIONS, role_label, WRITE_SETTINGS, effective_permissions, role_defaults
 from app.core.entities import Company, Role, UserProfile
 from app.core.tenancy import current_company
 from app.database import get_db
@@ -62,7 +63,7 @@ class MeRead(BaseModel):
 
 @router.get("/roles", response_model=list[RoleRead])
 def list_roles() -> list[RoleRead]:
-    return [RoleRead(role=r, label=ROLE_LABELS_FR[r], permissions=sorted(role_defaults(r))) for r in Role]
+    return [RoleRead(role=r, label=role_label(r), permissions=sorted(role_defaults(r))) for r in Role]
 
 
 @router.get("/access-catalog")
@@ -80,7 +81,7 @@ def me(user: CurrentUser = Depends(get_current_user)) -> MeRead:
     return MeRead(
         profile=UserRead.of(user.profile) if user.profile else None,
         role=user.role,
-        role_label=ROLE_LABELS_FR[user.role],
+        role_label=role_label(user.role),
         permissions=sorted(user.permissions),
     )
 
@@ -101,7 +102,7 @@ def create_user(
     # to hold WRITE_SETTINGS; every later one needs it.
     has_any = db.query(UserProfile.id).filter_by(company_id=company.id).first() is not None
     if has_any and not user.can(WRITE_SETTINGS):
-        raise HTTPException(status_code=403, detail="Votre profil ne permet pas de gérer les utilisateurs.")
+        raise HTTPException(status_code=403, detail=tx("Votre profil ne permet pas de gérer les utilisateurs.", "Your profile does not allow managing users."))
     profile = UserProfile(company_id=company.id, name=payload.name.strip(), email=payload.email, role=payload.role, access_grants=[], access_revokes=[])
     db.add(profile)
     db.commit()
@@ -121,7 +122,7 @@ def update_user(
 ) -> UserRead:
     profile = db.get(UserProfile, user_id)
     if profile is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail=tx("Profil introuvable", "Profile not found"))
     changes = payload.model_dump(exclude_unset=True)
     editing_self = user.profile is not None and user.profile.id == profile.id
     admin_change = bool(_ADMIN_FIELDS & changes.keys())
@@ -130,14 +131,14 @@ def update_user(
     # administrator's decision (write:settings) -- and never on one's own
     # profile: nobody grants themselves permissions (brain/permissions.md).
     if admin_change and editing_self:
-        raise HTTPException(status_code=403, detail="Vous ne pouvez pas modifier vos propres accès ou votre propre rôle.")
+        raise HTTPException(status_code=403, detail=tx("Vous ne pouvez pas modifier vos propres accès ou votre propre rôle.", "You cannot change your own access or your own role."))
     if (admin_change or not editing_self) and not user.can(WRITE_SETTINGS):
-        raise HTTPException(status_code=403, detail="Votre profil ne permet pas de gérer les utilisateurs.")
+        raise HTTPException(status_code=403, detail=tx("Votre profil ne permet pas de gérer les utilisateurs.", "Your profile does not allow managing users."))
     for key in ("access_grants", "access_revokes"):
         if key in changes:
             unknown = set(changes[key] or []) - ALL_PERMISSIONS
             if unknown:
-                raise HTTPException(status_code=400, detail=f"Permission inconnue : {', '.join(sorted(unknown))}")
+                raise HTTPException(status_code=400, detail=tx(f"Permission inconnue : {', '.join(sorted(unknown))}", f"Unknown permission: {', '.join(sorted(unknown))}"))
             changes[key] = sorted(set(changes[key] or []))
     for field, value in changes.items():
         setattr(profile, field, value)

@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import text_of, tx
+from app.core.observable_labels import observable_label
+from app.intelligence.risks.kinds import CUSTOMER_DECLINE, MARGIN_DETERIORATION, SUPPLIER_PERFORMANCE
 from app.business_context.service import BusinessContextService
 from app.core.baseline import Baseline, customer_value_baseline, margin_baseline, supplier_delivery_baseline
 from app.core.entities import (
@@ -127,9 +130,9 @@ def _recurrence_count(session: Session, event_type: str, related_entity_id: uuid
 
 
 def _build_area_for_risk(session: Session, risk: Risk, business_context: BusinessContext) -> SnapshotArea:
-    title = risk.title
+    title = text_of(risk, "title")
 
-    if "Margin deterioration" in title and risk.related_entity_type == RelatedEntityType.PRODUCT:
+    if MARGIN_DETERIORATION.matches(title) and risk.related_entity_type == RelatedEntityType.PRODUCT:
         baseline, current_value = margin_baseline(session, risk.related_entity_id, business_context)
         correlation: list[str] = []
         product = session.get(Product, risk.related_entity_id)
@@ -144,7 +147,7 @@ def _build_area_for_risk(session: Session, risk: Risk, business_context: Busines
                 .first()
             )
             if correlated is not None:
-                correlation.append(correlated.title)
+                correlation.append(text_of(correlated, "title"))
         significance = assess_significance(
             baseline,
             current_value,
@@ -158,7 +161,7 @@ def _build_area_for_risk(session: Session, risk: Risk, business_context: Busines
             "margin_pct", baseline, current_value, significance,
         )
 
-    if "Supplier performance deterioration" in title and risk.related_entity_type == RelatedEntityType.SUPPLIER:
+    if SUPPLIER_PERFORMANCE.matches(title) and risk.related_entity_type == RelatedEntityType.SUPPLIER:
         baseline, current_value = supplier_delivery_baseline(session, risk.related_entity_id, business_context)
         significance = assess_significance(
             baseline,
@@ -172,7 +175,7 @@ def _build_area_for_risk(session: Session, risk: Risk, business_context: Busines
             "delivery_delay_days", baseline, current_value, significance,
         )
 
-    if "Customer decline" in title and risk.related_entity_type == RelatedEntityType.CUSTOMER:
+    if CUSTOMER_DECLINE.matches(title) and risk.related_entity_type == RelatedEntityType.CUSTOMER:
         baseline, current_value = customer_value_baseline(session, risk.related_entity_id, business_context)
         significance = assess_significance(
             baseline,
@@ -235,7 +238,10 @@ def _build_area_for_observation(entry: EventLogEntry) -> SnapshotArea:
     return SnapshotArea(
         domain=payload.get("domain", "unknown"),
         kind="observation",
-        title=f"{payload.get('observable')} anomaly on {payload.get('entity_name')}",
+        title=tx(
+            f"{payload.get('entity_name')} — anomalie détectée sur {observable_label(payload.get('observable'))}",
+            f"{payload.get('entity_name')} — anomaly detected in {observable_label(payload.get('observable'))}",
+        ),
         entity_type=RelatedEntityType(entity_type) if entity_type else None,
         entity_id=uuid.UUID(entity_id) if entity_id else None,
         metric=payload.get("observable"),
@@ -255,7 +261,9 @@ def _build_area_for_interpretation(observation_entry: EventLogEntry, interpretat
     duplicate (see brain/interpretation_engine.md)."""
 
     obs_payload = observation_entry.payload
-    interp_payload = interpretation_entry.payload
+    from app.interpretation.engine import localize_interpretation  # circular at module load
+
+    interp_payload = localize_interpretation(interpretation_entry.payload)
     correlated = obs_payload.get("correlated_observations") or []
     significance = Significance(
         deviation=obs_payload.get("deviation"),
@@ -299,7 +307,9 @@ def _build_area_for_decision(
     richer, not a duplicate (see brain/decision_intelligence.md)."""
 
     obs_payload = observation_entry.payload
-    decision_payload = decision_entry.payload
+    from app.decision.engine import localize_decision  # circular at module load
+
+    decision_payload = localize_decision(decision_entry.payload)
     correlated = obs_payload.get("correlated_observations") or []
     significance = Significance(
         deviation=obs_payload.get("deviation"),
@@ -343,7 +353,7 @@ def _build_area_for_opportunity(session: Session, opportunity: Opportunity, busi
         strategic_relevance=_strategic_relevance(business_context, "sales", "customer"),
     )
     return SnapshotArea(
-        "sales", "opportunity", opportunity.title, opportunity.related_entity_type,
+        "sales", "opportunity", text_of(opportunity, "title"), opportunity.related_entity_type,
         opportunity.related_entity_id, "customer_revenue_variation_pct", baseline, current_value, significance,
     )
 

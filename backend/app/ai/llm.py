@@ -32,6 +32,12 @@ class OpenAILLMClient(LLMClient):
         return response.choices[0].message.content or ""
 
 
+# Prefix of the deterministic fallback's raw output. It must never reach a
+# user-facing text (the Interpretation/Decision engines and Ask AI build
+# their own French sentences; tests check that this marker never leaks).
+DETERMINISTIC_MARKER = "[réponse déterministe — aucun modèle de langage configuré]"
+
+
 class DeterministicLLMClient(LLMClient):
     """Dependency-free fallback used when no OpenAI API key is configured. Also
     the natural choice to inject directly in tests: no network, no key, fully
@@ -40,7 +46,7 @@ class DeterministicLLMClient(LLMClient):
     code path either way, only the final phrasing changes."""
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
-        return f"[deterministic answer -- no LLM configured] {user_prompt}"
+        return f"{DETERMINISTIC_MARKER} {user_prompt}"
 
 
 def get_llm_client() -> LLMClient:

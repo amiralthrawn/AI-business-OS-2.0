@@ -5,6 +5,7 @@ import TaskActionButtons from "@/components/actions/TaskActionButtons";
 import Button from "@/components/ui/Button";
 import { askAI } from "@/lib/api";
 import type { AskAIResponse } from "@/lib/types";
+import { valueLabel } from "@/lib/labels";
 
 // The same Ask AI entry point as /ai/ask-ai, embedded compactly on the
 // Command Center -- calls the same POST /ai/ask (the AI Orchestrator), not a
@@ -53,8 +54,8 @@ export default function HomeAskAI() {
         <div className="space-y-2.5 rounded-xl bg-surface-sunken p-4">
           <p className="whitespace-pre-wrap text-[13.5px] text-text">{result.answer}</p>
           <p className="text-[11.5px] text-text-faint">
-            Agent&nbsp;: {result.agent}
-            {result.agent.includes(",") && " (cross-domaine)"}
+            Secteur{result.agent.includes(",") ? "s" : ""} consulté{result.agent.includes(",") ? "s" : ""}&nbsp;: {result.agent.split(",").map((a) => valueLabel("domain", a.trim())).join(", ")}
+            {result.agent.includes(",") && " (raisonnement cross-domaine)"}
           </p>
           {result.requires_human_validation && result.action_result && (
             <TaskActionButtons taskId={result.action_result.task_id} taskTitle={result.action_result.title} />

@@ -59,11 +59,14 @@ def test_seed_produces_the_intended_causal_chains_via_the_real_pipelines(db_sess
     risks = {r.title: r for r in db_session.query(Risk).all()}
     opportunities = {o.title: o for o in db_session.query(Opportunity).all()}
 
-    assert any("Supplier cost increase" in title for title in risks)  # reactive chain (Sensor Module)
-    assert any("Margin deterioration" in title for title in risks)  # Steel Frame Assembly
-    assert any("Supplier performance deterioration" in title for title in risks)  # Iberia Logistics Parts
-    assert any("Customer decline" in title and "BrightWorks" in title for title in risks)
-    assert any("Growing customer" in title and "Metroline" in title for title in opportunities)
+    from app.intelligence.risks.kinds import CUSTOMER_DECLINE, GROWING_CUSTOMER, MARGIN_DETERIORATION, SUPPLIER_COST_INCREASE, SUPPLIER_PERFORMANCE
+
+    # Generated titles are French (decision #56).
+    assert any(SUPPLIER_COST_INCREASE.matches(title) and title.startswith("Hausse") for title in risks)  # reactive chain (Sensor Module)
+    assert any(MARGIN_DETERIORATION.matches(title) for title in risks)  # Steel Frame Assembly
+    assert any(SUPPLIER_PERFORMANCE.matches(title) for title in risks)  # Iberia Logistics Parts
+    assert any(CUSTOMER_DECLINE.matches(title) and "BrightWorks" in title for title in risks)
+    assert any(GROWING_CUSTOMER.matches(title) and "Metroline" in title for title in opportunities)
 
     # Vantix Group's flat order pattern is the "ignore routine" control case:
     # it must not trigger anything.

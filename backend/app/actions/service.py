@@ -4,6 +4,7 @@ from typing import Literal
 
 from sqlalchemy.orm import Session
 
+from app.intelligence.risks.kinds import review_task_texts
 from app.core.entities import Contact, RelatedEntityType, Risk, Task, TaskStatus
 from app.core.events.bus import EventBus
 from app.core.events.business_event import BusinessEvent
@@ -42,6 +43,7 @@ class ActionsService:
         pending_action: str = "create_task",
         correlation_id: uuid.UUID | None = None,
         agent: str | None = None,
+        i18n: dict | None = None,
     ) -> Task:
         """Creates a Task that represents a proposed action awaiting human
         validation -- e.g. from the AI `create_task` capability. This is the
@@ -62,6 +64,7 @@ class ActionsService:
             company_id=company_id,
             title=title,
             description=description,
+            i18n=i18n,
             status=TaskStatus.PENDING_VALIDATION,
             related_entity_type=related_entity_type,
             related_entity_id=related_entity_id,
@@ -95,6 +98,7 @@ class ActionsService:
         requires_decision: bool = False,
         related_entity_type: RelatedEntityType | None = None,
         related_entity_id: uuid.UUID | None = None,
+        i18n: dict | None = None,
     ) -> Task:
         """A Task created directly by a human from the frontend (Step 27's
         "Créer une tâche" action, available from a Risk/Opportunity/Supplier/
@@ -108,6 +112,7 @@ class ActionsService:
             company_id=company_id,
             title=title,
             description=description,
+            i18n=i18n,
             domain=domain,
             requires_decision=requires_decision,
             status=TaskStatus.OPEN,
@@ -265,6 +270,7 @@ class ActionsService:
             # nothing to build a Task from.
             return None
 
+        texts = review_task_texts(risk.i18n, risk.title, risk.description)
         task = Task(
             company_id=risk.company_id,
             # Derived from the actual Risk rather than a hardcoded string:
@@ -272,8 +278,9 @@ class ActionsService:
             # rule produced it (cost increase, margin, delivery performance,
             # customer decline, ...), so the title must reflect that risk,
             # not assume it was always a supplier cost increase.
-            title=f"Review: {risk.title}",
-            description=f"{risk.description or risk.title} Review and decide on next steps.",
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             status=TaskStatus.PENDING_VALIDATION,
             related_entity_type=risk.related_entity_type,
             related_entity_id=risk.related_entity_id,

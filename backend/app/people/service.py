@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import use_locale
+from app.core.i18n import both, colon, money, num, tx
 from app.actions.service import ActionsService
 from app.ai.llm import DeterministicLLMClient, LLMClient
 from app.core.analytics import _as_aware_utc
@@ -59,14 +61,31 @@ GENERIC_EMPLOYER_CHARGES = (0.20, 0.47)
 
 _RANK = {"unknown": 0, "simulated": 1, "benchmark": 1, "estimated": 2, "declared": 3, "observed": 4}
 _CONF_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
-COST_KIND_LABELS = {
-    "salary": "Salaire brut annuel",
-    "employer_charges": "Charges patronales",
-    "software": "Logiciels & licences",
-    "equipment": "Matériel",
-    "benefits": "Avantages",
-    "other": "Autres coûts",
+COST_KINDS: dict[str, tuple[str, str]] = {  # (French, English)
+    "salary": ("Salaire brut annuel", "Annual gross salary"),
+    "employer_charges": ("Charges patronales", "Employer charges"),
+    "software": ("Logiciels & licences", "Software & licences"),
+    "equipment": ("Matériel", "Equipment"),
+    "benefits": ("Avantages", "Benefits"),
+    "other": ("Autres coûts", "Other costs"),
 }
+COST_KIND_LABELS = {kind: labels[0] for kind, labels in COST_KINDS.items()}  # French, as stored
+
+
+def cost_kind_label(kind: str) -> str:
+    return tx(*COST_KINDS[kind]) if kind in COST_KINDS else kind
+
+
+def _cost_line_label(kind: str, stored: str | None) -> str:
+    """A label someone typed is shown as written; the default one of its kind
+    (stored in French) follows the interface language."""
+
+    return stored if stored and stored != COST_KIND_LABELS.get(kind) else cost_kind_label(kind)
+
+
+def _cost_source(source: str | None) -> str | None:
+    m = re.match(r"^Décision validée \((?P<id>[^)]+)\)$", source or "")
+    return tx(source, f"Approved decision ({m['id']})") if m else source
 
 
 class PeopleError(ValueError):
@@ -109,49 +128,49 @@ class EmployeeCost:
 
 def employee_cost(session: Session, employee: Employee) -> EmployeeCost:
     lines = [
-        CostLine(i.kind, i.label or COST_KIND_LABELS.get(i.kind, i.kind), i.annual_min, i.annual_max, i.basis.value, i.confidence, i.source)
+        CostLine(i.kind, _cost_line_label(i.kind, i.label), i.annual_min, i.annual_max, i.basis.value, i.confidence, _cost_source(i.source))
         for i in employee.cost_items
     ]
     missing: list[str] = []
     salary = next((line for line in lines if line.kind == "salary"), None)
     if salary is None:
-        missing.append("Salaire non renseigné : coût total non calculable.")
+        missing.append(tx("Salaire non renseigné : coût total non calculable.", "Salary not provided: total cost cannot be computed."))
     elif not any(line.kind == "employer_charges" for line in lines):
         ctx = _context(session, employee.company_id)
         country = (ctx.country if ctx else None) or ""
         lo, hi = EMPLOYER_CHARGE_BENCHMARKS.get(country.upper(), GENERIC_EMPLOYER_CHARGES)
         lines.append(
             CostLine(
-                "employer_charges", "Charges patronales (référence)", round(salary.annual_min * lo), round(salary.annual_max * hi),
+                "employer_charges", tx("Charges patronales (référence)", "Employer charges (reference)"), round(salary.annual_min * lo), round(salary.annual_max * hi),
                 ValueBasis.BENCHMARK.value, "medium" if country.upper() in EMPLOYER_CHARGE_BENCHMARKS else "low",
-                f"Référence {country or 'générique'} {lo:.0%}–{hi:.0%} du brut", computed=True,
+                tx(f"Référence {country or 'générique'} {lo:.0%}–{hi:.0%} du brut", f"{country or 'Generic'} reference {lo:.0%}–{hi:.0%} of gross"), computed=True,
             )
         )  # fmt: skip
     for kind in ("software", "equipment"):
         if not any(line.kind == kind for line in lines):
-            missing.append(f"{COST_KIND_LABELS[kind]} non renseigné(s).")
+            missing.append(tx(f"{cost_kind_label(kind)} non renseigné(s).", f"{cost_kind_label(kind)} not provided."))
 
     if not lines or salary is None:
-        return EmployeeCost(lines, 0.0, 0.0, "unknown", "none", "Données insuffisantes pour estimer le coût.", missing)
+        return EmployeeCost(lines, 0.0, 0.0, "unknown", "none", tx("Données insuffisantes pour estimer le coût.", "Insufficient data to estimate the cost."), missing)
     weakest = min(lines, key=lambda line: _RANK.get(line.basis, 0)).basis
     confidence = min((line.confidence for line in lines), key=lambda c: _CONF_RANK.get(c, 0))
     if missing and confidence == "high":
         confidence = "medium"
     total_min, total_max = sum(line.annual_min for line in lines), sum(line.annual_max for line in lines)
     explanation = (
-        "Coût complet calculé à partir de montants tous réels."
+        tx("Coût complet calculé à partir de montants tous réels.", "Full cost computed from actual amounts only.")
         if weakest == "observed"
-        else "Estimation : au moins une composante est déclarée, estimée, issue d'une référence ou simulée."
+        else tx("Estimation : au moins une composante est déclarée, estimée, issue d'une référence ou simulée.", "Estimate: at least one component is declared, estimated, from a reference or simulated.")
     )
     return EmployeeCost(lines, round(total_min), round(total_max), weakest, confidence, explanation, missing)
 
 
 def add_cost_item(session: Session, event_bus: EventBus | None, employee: Employee, *, kind: str, annual_min: float, annual_max: float | None, basis: ValueBasis, label: str | None = None, confidence: str = "medium", source: str | None = None) -> EmployeeCostItem:
     if kind not in COST_KIND_LABELS:
-        raise PeopleError(f"Type de coût inconnu : {kind}")
+        raise PeopleError(tx(f"Type de coût inconnu : {kind}", f"Unknown cost type: {kind}"))
     annual_max = annual_min if annual_max is None else annual_max
     if annual_max < annual_min:
-        raise PeopleError("Le maximum doit être supérieur ou égal au minimum")
+        raise PeopleError(tx("Le maximum doit être supérieur ou égal au minimum", "The maximum must be greater than or equal to the minimum"))
     before = employee_cost(session, employee)
     item = EmployeeCostItem(kind=kind, label=label, annual_min=annual_min, annual_max=annual_max, basis=basis, confidence=confidence, source=source)
     employee.cost_items.append(item)
@@ -213,11 +232,11 @@ def task_summary(session: Session, employee: Employee, days: int = 90) -> dict:
 
 
 def _eur(v: float) -> str:
-    return f"{v:,.0f}".replace(",", " ") + " €"
+    return money(v, 0)
 
 
 def _span_eur(lo: float, hi: float) -> str:
-    return _eur(lo) if abs(hi - lo) < 0.5 else f"{_eur(lo)[:-2]}–{_eur(hi)}"
+    return _eur(lo) if abs(hi - lo) < 0.5 else f"{_eur(lo)}–{_eur(hi)}"
 
 
 def _span_pct(lo: float, hi: float) -> str:
@@ -233,8 +252,8 @@ def estimate_contribution(session: Session, employee: Employee, cost: EmployeeCo
 
     tasks = task_summary(session, employee)
     components = [
-        ContributionComponent("Tâches terminées (90 j)", str(tasks["done_recent"]), "observed", f"dont {tasks['critical_done']} à décision"),
-        ContributionComponent("Tâches ouvertes / en retard", f"{tasks['open']} / {tasks['overdue']}", "observed"),
+        ContributionComponent(tx("Tâches terminées (90 j)", "Tasks completed (90 d)"), str(tasks["done_recent"]), "observed", tx(f"dont {tasks['critical_done']} à décision", f"of which {tasks['critical_done']} requiring a decision")),
+        ContributionComponent(tx("Tâches ouvertes / en retard", "Open / overdue tasks"), f"{tasks['open']} / {tasks['overdue']}", "observed"),
     ]
     margin_min = margin_max = None
     if employee.user_id:
@@ -249,11 +268,11 @@ def estimate_contribution(session: Session, employee: Employee, cost: EmployeeCo
             margin_min, margin_max = sum(v.margin_min for v in views), sum(v.margin_max for v in views)
             bases = {v.cost_basis for v in views}
             basis = "observed" if bases == {"actual"} else "estimated"
-            components.append(ContributionComponent("Marge des commandes portées", _span_eur(margin_min, margin_max), basis, f"{len(orders)} commande(s), {won} affaire(s) gagnée(s)"))
+            components.append(ContributionComponent(tx("Marge des commandes portées", "Margin of owned orders"), _span_eur(margin_min, margin_max), basis, tx(f"{len(orders)} commande(s), {won} affaire(s) gagnée(s)", f"{len(orders)} order(s), {won} deal(s) won")))
         else:
-            components.append(ContributionComponent("Affaires portées", "aucune commande", "observed"))
+            components.append(ContributionComponent(tx("Affaires portées", "Owned deals"), tx("aucune commande", "no order"), "observed"))
     else:
-        components.append(ContributionComponent("Affaires portées", "non rattachable", "unknown", "Aucun profil utilisateur lié à cet employé."))
+        components.append(ContributionComponent(tx("Affaires portées", "Owned deals"), tx("non rattachable", "not attributable"), "unknown", tx("Aucun profil utilisateur lié à cet employé.", "No user profile linked to this employee.")))
 
     cost_coverage = None
     if margin_min is not None and cost and cost.total_max > 0 and cost.basis != "unknown":
@@ -263,16 +282,16 @@ def estimate_contribution(session: Session, employee: Employee, cost: EmployeeCo
     if margin_min is not None:
         confidence = "medium" if tasks["done_recent"] >= 3 else "low"
         statement = (
-            f"Contribution estimée (partielle) : les affaires portées dégagent {_span_eur(margin_min, margin_max)} de marge"
-            + (f", soit environ {cost_coverage} du coût employeur estimé" if cost_coverage else "")
-            + ". Le travail non commercial (support, organisation, qualité) n'est pas mesuré ici."
+            tx(f"Contribution estimée (partielle) : les affaires portées dégagent {_span_eur(margin_min, margin_max)} de marge", f"Estimated (partial) contribution: the owned deals generate {_span_eur(margin_min, margin_max)} of margin")
+            + (tx(f", soit environ {cost_coverage} du coût employeur estimé", f", i.e. about {cost_coverage} of the estimated employer cost") if cost_coverage else "")
+            + tx(". Le travail non commercial (support, organisation, qualité) n'est pas mesuré ici.", ". Non-sales work (support, organisation, quality) is not measured here.")
         )
     elif sufficient:
         confidence = "low"
-        statement = "Contribution estimée à partir du travail réalisé uniquement : aucun revenu n'est rattachable à ce poste. Estimation partielle."
+        statement = tx("Contribution estimée à partir du travail réalisé uniquement : aucun revenu n'est rattachable à ce poste. Estimation partielle.", "Contribution estimated from the work done only: no revenue can be attributed to this position. Partial estimate.")
     else:
         confidence = "none"
-        statement = "Données insuffisantes → estimation non fiable. Les données disponibles permettent seulement une vue partielle de la contribution."
+        statement = tx("Données insuffisantes → estimation non fiable. Les données disponibles permettent seulement une vue partielle de la contribution.", "Insufficient data → unreliable estimate. The available data only gives a partial view of the contribution.")
     return Contribution(components, margin_min, margin_max, cost_coverage, confidence, sufficient, statement)
 
 
@@ -305,18 +324,18 @@ def evolution_suggestions(session: Session, employee: Employee) -> list[dict]:
         others = [e for e in _active(session, employee.company_id) if e.id != employee.id and _covers(_norm(e.skills), need)]
         if others:
             continue
-        reasons = [f"compétence « {need.skill} » déclarée comme besoin ({need.priority})"]
+        reasons = [tx(f"compétence « {need.skill} » déclarée comme besoin ({need.priority})", f'skill "{need.skill}" declared as a need ({need.priority})')]
         if tenure_years >= 1:
-            reasons.append(f"{tenure_years:.1f} an(s) d'ancienneté")
+            reasons.append(tx(f"{tenure_years:.1f} an(s) d'ancienneté", f"{tenure_years:.1f} year(s) of seniority"))
         if tasks["done_recent"] >= 3:
-            reasons.append(f"{tasks['done_recent']} tâches terminées sur 90 jours")
+            reasons.append(tx(f"{tasks['done_recent']} tâches terminées sur 90 jours", f"{tasks['done_recent']} tasks completed over 90 days"))
         suggestions.append(
             {
                 "kind": "evolution",
-                "title": f"Évolution possible vers un rôle « {need.skill} »",
+                "title": tx(f"Évolution possible vers un rôle « {need.skill} »", f'Possible move to a "{need.skill}" role'),
                 "reasons": reasons,
                 "confidence": "medium" if len(reasons) >= 3 else "low",
-                "note": "Suggestion à examiner par un responsable — aucune décision automatique.",
+                "note": tx("Suggestion à examiner par un responsable — aucune décision automatique.", "Suggestion for a manager to review — no automatic decision."),
             }
         )
     return suggestions
@@ -328,16 +347,22 @@ def propose_decision(session: Session, event_bus: EventBus, employee: Employee, 
     carrying its parameters. Nothing changes until it is approved."""
 
     if kind not in {"promotion", "raise", "evolution", "decision"}:
-        raise PeopleError("Type de décision inconnu")
+        raise PeopleError(tx("Type de décision inconnu", "Unknown decision type"))
     if kind == "promotion" and not new_job_title:
-        raise PeopleError("Une promotion précise le nouveau poste")
+        raise PeopleError(tx("Une promotion précise le nouveau poste", "A promotion specifies the new position"))
     if kind == "raise" and not new_salary:
-        raise PeopleError("Une augmentation précise le nouveau salaire annuel brut")
-    labels = {"promotion": "Promotion", "raise": "Augmentation", "evolution": "Évolution", "decision": "Décision"}
-    detail = new_job_title or (f"{new_salary:,.0f} € brut / an".replace(",", " ") if new_salary else "")
+        raise PeopleError(tx("Une augmentation précise le nouveau salaire annuel brut", "A raise specifies the new annual gross salary"))
+    labels = {"promotion": ("Promotion", "Promotion"), "raise": ("Augmentation", "Raise"), "evolution": ("Évolution", "Career move"), "decision": ("Décision", "Decision")}
+
+    def title() -> str:
+        detail = new_job_title or (tx(f"{money(new_salary, 0)} brut / an", f"{money(new_salary, 0)} gross / year") if new_salary else "")
+        return f"{tx(*labels[kind])} — {employee.full_name}" + (f"{colon()} {detail}" if detail else "")
+
+    texts = both(lambda: {"title": title(), "description": rationale})
     task = ActionsService(session, event_bus).propose_task(
         company_id=employee.company_id,
-        title=f"{labels[kind]} — {employee.full_name}" + (f" : {detail}" if detail else ""),
+        title=texts["fr"]["title"],
+        i18n=texts,
         description=rationale,
         related_entity_type=RelatedEntityType.EMPLOYEE,
         related_entity_id=employee.id,
@@ -357,7 +382,7 @@ def finalize_hr_decision(session: Session, event_bus: EventBus, task: Task) -> T
 
     employee = session.get(Employee, task.related_entity_id) if task.related_entity_id else None
     if employee is None:
-        raise PeopleError("Employé introuvable")
+        raise PeopleError(tx("Employé introuvable", "Employee not found"))
     payload = task.action_payload or {}
     before = employee_cost(session, employee)
     if payload.get("kind") == "promotion" and payload.get("new_job_title"):
@@ -405,17 +430,19 @@ def skills_gap(session: Session, company_id: uuid.UUID) -> dict:
         if holders and not (len(holders) == 1 and load is not None and load > 8):
             covered.append(entry)
             continue
-        entry["coverage"] = "aucune" if not holders else "une seule personne, déjà très chargée"
+        entry["coverage"] = tx("aucune", "none") if not holders else tx("une seule personne, déjà très chargée", "a single person, already very busy")
+        # The skill and the reason are what the company declared: quoted as written.
+        reason = (need.reason or "").strip().rstrip(".")
         entry["recommendation"] = {
             "profile": f"{need.skill} ({need.level})",
             "skills": [need.skill, *need.keywords][:6],
             "justification": (
-                f"Besoin déclaré « {need.skill} »"
-                + (f" : {need.reason}" if need.reason else "")
-                + f". Couverture actuelle : {entry['coverage']}."
-                + (f" Charge observée : {load:.1f} tâches ouvertes par personne." if load is not None else "")
+                tx(f"Besoin déclaré « {need.skill} »", f'Declared need "{need.skill}"')
+                + (f"{colon()} {reason}" if reason else "")
+                + tx(f". Couverture actuelle : {entry['coverage']}.", f". Current coverage: {entry['coverage']}.")
+                + (tx(f" Charge observée : {num(load)} tâches ouvertes par personne.", f" Observed load: {num(load)} open tasks per person.") if load is not None else "")
             ),
-            "impact": need.expected_impact or "Non précisé",
+            "impact": need.expected_impact or tx("Non précisé", "Not specified"),
             "priority": need.priority,
             "confidence": "medium" if need.basis == ValueBasis.DECLARED else "low",
         }
@@ -430,11 +457,16 @@ def publish_skill_gaps(session: Session, event_bus: EventBus, company_id: uuid.U
 
     created = 0
     for gap in skills_gap(session, company_id)["gaps"]:
-        title = f"Recruter ou former : {gap['skill']}"
+        title = f"Recruter ou former : {gap['skill']}"  # French column, also the de-duplication key
         if session.query(Opportunity.id).filter_by(company_id=company_id, title=title).first() is not None:
             continue
+        texts = {}
+        for locale in ("fr", "en"):
+            with use_locale(locale):
+                localized_gap = next(g for g in skills_gap(session, company_id)["gaps"] if g["need_id"] == gap["need_id"])
+                texts[locale] = {"title": tx(title, f"Hire or train: {gap['skill']}"), "description": localized_gap["recommendation"]["justification"]}
         opportunity = Opportunity(
-            company_id=company_id, title=title, description=gap["recommendation"]["justification"],
+            company_id=company_id, title=title, description=texts["fr"]["description"], i18n=texts,
             status=OpportunityStatus.OPEN, related_entity_type=RelatedEntityType.COMPANY, related_entity_id=company_id,
         )  # fmt: skip
         session.add(opportunity)
@@ -523,8 +555,9 @@ def match_candidate(session: Session, candidate: Candidate) -> list[dict]:
         results.append(
             {
                 "need_id": need.id, "need": need.skill, "need_is_gap": need.id in gaps, "need_priority": need.priority,
-                "match": level, "matched_skills": hits, "basis": "declared",
-                "note": "Correspondance calculée sur les compétences déclarées par le candidat (non vérifiées).",
+                "match": level, "match_label": tx(level, {"élevée": "high", "moyenne": "medium", "faible": "low"}[level]),
+                "matched_skills": hits, "basis": "declared",
+                "note": tx("Correspondance calculée sur les compétences déclarées par le candidat (non vérifiées).", "Match computed on the skills declared by the candidate (not verified)."),
             }
         )  # fmt: skip
     order = {"élevée": 0, "moyenne": 1, "faible": 2}

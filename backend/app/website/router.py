@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, require
 from app.access.policy import VIEW_COMMUNICATIONS, WRITE_COMMUNICATIONS, WRITE_SETTINGS
 from app.ai.llm import LLMClient, get_llm_client
@@ -25,7 +26,7 @@ class SiteIn(BaseModel):
 def _proposal_out(p: WebsiteChangeProposal) -> dict:
     return {
         "id": p.id, "page_url": p.page_url, "field": p.field, "current_value": p.current_value, "proposed_value": p.proposed_value,
-        "rationale": p.rationale, "generated_by": p.generated_by, "status": p.status, "task_id": p.task_id,
+        "rationale": service.display_rationale(p.rationale), "generated_by": p.generated_by, "status": p.status, "task_id": p.task_id,
     }  # fmt: skip
 
 
@@ -59,7 +60,7 @@ def run_audit(
 def submit(proposal_id: uuid.UUID, db: Session = Depends(get_db), event_bus: EventBus = Depends(get_event_bus), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_COMMUNICATIONS))) -> dict:
     proposal = db.get(WebsiteChangeProposal, proposal_id)
     if proposal is None or proposal.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Proposition introuvable")
+        raise HTTPException(status_code=404, detail=tx("Proposition introuvable", "Proposal not found"))
     try:
         task = service.submit_proposal(db, event_bus, proposal)
     except service.WebsiteError as exc:

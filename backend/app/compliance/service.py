@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import text_of, tx
 from app.actions.service import ActionsService
 from app.core.analytics import _as_aware_utc
 from app.core.entities import Contact, RelatedEntityType, Supplier, Task, TaskStatus
@@ -25,23 +26,31 @@ from app.objects.graph import related_edges
 
 COMPLIANCE_DOMAIN = "compliance"
 
-# category -> (label, expert kind needed or None, benchmark hours range)
-CATEGORIES: dict[str, tuple[str, str | None, tuple[float, float]]] = {
-    "contract_review": ("Contrat à vérifier", "law_firm", (2, 5)),
-    "nda": ("NDA", "law_firm", (1, 2)),
-    "legal_request": ("Demande juridique", "law_firm", (3, 8)),
-    "regulatory": ("Obligation réglementaire", "law_firm", (4, 10)),
-    "accounting_request": ("Demande comptable / fiscale", "accounting_firm", (2, 6)),
-    "insurance": ("Assurance", "insurance_advisor", (1, 3)),
-    "renewal": ("Renouvellement / échéance", None, (0, 0)),
-    "other": ("Autre", None, (0, 0)),
+# category -> ((French label, English label), expert kind needed or None, benchmark hours range)
+CATEGORIES: dict[str, tuple[tuple[str, str], str | None, tuple[float, float]]] = {
+    "contract_review": (("Contrat à vérifier", "Contract to review"), "law_firm", (2, 5)),
+    "nda": (("NDA", "NDA"), "law_firm", (1, 2)),
+    "legal_request": (("Demande juridique", "Legal request"), "law_firm", (3, 8)),
+    "regulatory": (("Obligation réglementaire", "Regulatory obligation"), "law_firm", (4, 10)),
+    "accounting_request": (("Demande comptable / fiscale", "Accounting / tax request"), "accounting_firm", (2, 6)),
+    "insurance": (("Assurance", "Insurance"), "insurance_advisor", (1, 3)),
+    "renewal": (("Renouvellement / échéance", "Renewal / deadline"), None, (0, 0)),
+    "other": (("Autre", "Other"), None, (0, 0)),
 }
-EXPERT_KIND_LABELS = {
-    "law_firm": "cabinet d'avocats",
-    "accounting_firm": "cabinet comptable",
-    "insurance_advisor": "courtier / conseil en assurance",
-    "expert": "expert externe",
+EXPERT_KINDS: dict[str, tuple[str, str]] = {  # (French, English)
+    "law_firm": ("cabinet d'avocats", "law firm"),
+    "accounting_firm": ("cabinet comptable", "accounting firm"),
+    "insurance_advisor": ("courtier / conseil en assurance", "insurance broker / advisor"),
+    "expert": ("expert externe", "external expert"),
 }
+
+
+def expert_kind_label(kind: str) -> str:
+    return tx(*EXPERT_KINDS[kind]) if kind in EXPERT_KINDS else kind
+
+
+def category_label(category: str | None) -> str:
+    return tx(*CATEGORIES.get(category or "other", CATEGORIES["other"])[0])
 # Hourly-rate BENCHMARKS used only when an expert has declared none.
 BENCHMARK_RATES: dict[str, tuple[float, float]] = {
     "law_firm": (150, 350),
@@ -60,7 +69,7 @@ def create_request(
     description: str | None, due_at: datetime | None,
 ) -> Task:  # fmt: skip
     if category not in CATEGORIES:
-        raise ComplianceError("Catégorie inconnue")
+        raise ComplianceError(tx("Catégorie inconnue", "Unknown category"))
     task = ActionsService(session, event_bus).create_manual_task(
         company_id=company_id, title=title, description=description, domain=COMPLIANCE_DOMAIN, requires_decision=category != "renewal",
     )  # fmt: skip
@@ -83,9 +92,10 @@ class ExpertOption:
 
 
 def recommend(session: Session, task: Task) -> dict:
-    label, expert_kind, (h_min, h_max) = CATEGORIES.get(task.category or "other", CATEGORIES["other"])
+    _, expert_kind, (h_min, h_max) = CATEGORIES.get(task.category or "other", CATEGORIES["other"])
+    label = category_label(task.category)
     if expert_kind is None:
-        return {"needs_expert": False, "statement": "Cette demande peut être traitée en interne (suivi d'échéance).", "options": []}
+        return {"needs_expert": False, "statement": tx("Cette demande peut être traitée en interne (suivi d'échéance).", "This request can be handled internally (deadline follow-up)."), "options": []}
 
     experts = session.query(Supplier).filter_by(company_id=task.company_id, supplier_kind=expert_kind).all()
     options = []
@@ -97,17 +107,20 @@ def recommend(session: Session, task: Task) -> dict:
         fee = (round(h_min * rate[0], -1), round(h_max * rate[1], -1)) if rate[1] else (None, None)
         has_contact = session.query(Contact.id).filter_by(related_entity_type=RelatedEntityType.SUPPLIER, related_entity_id=e.id).filter(Contact.email.isnot(None)).first() is not None
         options.append(ExpertOption(e.id, e.name, expert_kind, fee[0], fee[1], basis if fee[0] is not None else "unknown", confidence if fee[0] is not None else "none", has_contact))
-    statement = f"Cette demande ({label.lower()}) semble nécessiter l'intervention d'un {EXPERT_KIND_LABELS[expert_kind]}."
+    statement = tx(
+        f"Cette demande ({label.lower()}) semble nécessiter l'intervention d'un {expert_kind_label(expert_kind)}.",
+        f"This request ({label.lower()}) seems to require a {expert_kind_label(expert_kind)}.",
+    )
     if not options:
-        statement += " Aucun cabinet de ce type n'est enregistré : ajoutez-le comme fournisseur de services."
+        statement += tx(" Aucun cabinet de ce type n'est enregistré : ajoutez-le comme fournisseur de services.", " No firm of this type is recorded: add it as a service provider.")
     return {
         "needs_expert": True,
         "expert_kind": expert_kind,
-        "expert_kind_label": EXPERT_KIND_LABELS[expert_kind],
+        "expert_kind_label": expert_kind_label(expert_kind),
         "statement": statement,
         "hours_benchmark": [h_min, h_max],
         "options": [asdict(o) for o in options],
-        "note": "Honoraires = heures de référence pour ce type de demande × taux horaire (déclaré par le cabinet, sinon référence marché). Estimation, pas un devis.",
+        "note": tx("Honoraires = heures de référence pour ce type de demande × taux horaire (déclaré par le cabinet, sinon référence marché). Estimation, pas un devis.", "Fees = reference hours for this type of request × hourly rate (declared by the firm, otherwise market reference). An estimate, not a quote."),
     }
 
 
@@ -120,8 +133,8 @@ def list_requests(session: Session, company_id: uuid.UUID) -> list[dict]:
         open_ = t.status not in {TaskStatus.DONE, TaskStatus.CANCELLED, TaskStatus.EXECUTED, TaskStatus.REJECTED}
         rows.append(
             {
-                "id": t.id, "title": t.title, "description": t.description, "category": t.category,
-                "category_label": CATEGORIES.get(t.category or "other", CATEGORIES["other"])[0], "status": t.status.value,
+                "id": t.id, "title": text_of(t, "title"), "description": text_of(t, "description"), "category": t.category,
+                "category_label": category_label(t.category), "status": t.status.value,
                 "due_at": t.due_at, "overdue": bool(open_ and due and due < now), "open": open_,
                 "linked": {k: sum(1 for e in edges if e.type == k) for k in ("commercial_document", "communication", "document")},
             }

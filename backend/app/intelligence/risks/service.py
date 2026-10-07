@@ -2,6 +2,8 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import both, money, num, pct, tx
+from app.intelligence.risks.kinds import CUSTOMER_DECLINE, MARGIN_DETERIORATION, SUPPLIER_COST_INCREASE, SUPPLIER_PERFORMANCE, RiskKind
 from app.core.analytics import compute_customer_value_trend, compute_margin_trend, compute_supplier_delivery_performance
 from app.core.entities import Customer, Product, RelatedEntityType, Risk, RiskSeverity, RiskStatus, Supplier
 from app.core.events.bus import EventBus
@@ -47,13 +49,22 @@ class RiskDetectionService:
             # the caller that published the event.
             return None
 
+        texts = both(
+            lambda: {
+                "title": SUPPLIER_COST_INCREASE.title(f"{product.name} (+{pct(variation_pct, 0)})"),
+                "description": tx(
+                    f"Le coût unitaire est passé de {money(float(old_unit_cost))} à {money(float(new_unit_cost))} "
+                    f"(+{pct(variation_pct)}), constaté sur une facture ou un tarif fournisseur.",
+                    f"The unit cost rose from {money(float(old_unit_cost))} to {money(float(new_unit_cost))} "
+                    f"(+{pct(variation_pct)}), as seen on a supplier invoice or price list.",
+                ),
+            }
+        )
         risk = Risk(
             company_id=product.company_id,
-            title=f"Supplier cost increase of {variation_pct:.0%} on product {product.name}",
-            description=(
-                f"Unit cost rose from {old_unit_cost} to {new_unit_cost} "
-                f"({variation_pct:.1%}), detected from event {event.event_id}."
-            ),
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             severity=severity_for_cost_increase(variation_pct),
             status=RiskStatus.OPEN,
             related_entity_type=RelatedEntityType.SUPPLIER,
@@ -79,7 +90,7 @@ class RiskDetectionService:
         )
         return risk
 
-    def _has_open_risk_of_kind(self, title_prefix: str, related_entity_type: RelatedEntityType, related_entity_id) -> bool:
+    def _has_open_risk_of_kind(self, kind: RiskKind, related_entity_type: RelatedEntityType, related_entity_id) -> bool:
         """Idempotence for monitoring-triggered rules: unlike the reactive
         SupplierCostIncreased handler, a monitoring sweep has no single
         upstream event_id to dedupe against (it can be re-run at any time on
@@ -92,7 +103,8 @@ class RiskDetectionService:
                 Risk.related_entity_type == related_entity_type,
                 Risk.related_entity_id == related_entity_id,
                 Risk.status == RiskStatus.OPEN,
-                Risk.title.like(f"{title_prefix}%"),
+                # French title, or an English one written before V2.3.
+                Risk.title.like(f"{kind.prefix}%") | Risk.title.like(f"{kind.legacy_prefix}%"),
             )
             .first()
             is not None
@@ -111,8 +123,7 @@ class RiskDetectionService:
         if trend.trend != "deteriorating":
             return None
 
-        title = f"Margin deterioration on product {product.name}"
-        if self._has_open_risk_of_kind("Margin deterioration", RelatedEntityType.PRODUCT, product_id):
+        if self._has_open_risk_of_kind(MARGIN_DETERIORATION, RelatedEntityType.PRODUCT, product_id):
             return None
 
         signal_event = BusinessEvent(
@@ -127,13 +138,23 @@ class RiskDetectionService:
         )
         self.event_bus.publish(signal_event)
 
+        sign = "+" if trend.point_change >= 0 else "−"
+        texts = both(
+            lambda: {
+                "title": MARGIN_DETERIORATION.title(product.name),
+                "description": tx(
+                    f"La marge est passée de {pct(trend.baseline_margin_pct)} à {pct(trend.recent_margin_pct)} "
+                    f"({sign}{num(abs(trend.point_change) * 100)} pts), d'après les achats et ventes récents.",
+                    f"The margin went from {pct(trend.baseline_margin_pct)} to {pct(trend.recent_margin_pct)} "
+                    f"({sign}{num(abs(trend.point_change) * 100)} pts), based on recent purchases and sales.",
+                ),
+            }
+        )
         risk = Risk(
             company_id=product.company_id,
-            title=title,
-            description=(
-                f"Margin moved from {trend.baseline_margin_pct:.1%} to {trend.recent_margin_pct:.1%} "
-                f"({trend.point_change:+.1%} pts) based on recent purchase and sales transactions."
-            ),
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             severity=RiskSeverity.HIGH if trend.point_change <= -0.10 else RiskSeverity.MEDIUM,
             status=RiskStatus.OPEN,
             related_entity_type=RelatedEntityType.PRODUCT,
@@ -171,8 +192,7 @@ class RiskDetectionService:
         if performance.trend != "deteriorating":
             return None
 
-        title = f"Supplier performance deterioration: {supplier.name}"
-        if self._has_open_risk_of_kind("Supplier performance deterioration", RelatedEntityType.SUPPLIER, supplier_id):
+        if self._has_open_risk_of_kind(SUPPLIER_PERFORMANCE, RelatedEntityType.SUPPLIER, supplier_id):
             return None
 
         signal_event = BusinessEvent(
@@ -188,14 +208,24 @@ class RiskDetectionService:
         )
         self.event_bus.publish(signal_event)
 
+        texts = both(
+            lambda: {
+                "title": SUPPLIER_PERFORMANCE.title(supplier.name),
+                "description": tx(
+                    f"Le retard moyen de livraison est passé de {num(performance.baseline_avg_delay_days)} à "
+                    f"{num(performance.recent_avg_delay_days)} jours ; le taux de livraison à l'heure est passé de "
+                    f"{pct(performance.baseline_on_time_rate, 0)} à {pct(performance.recent_on_time_rate, 0)}.",
+                    f"The average delivery delay went from {num(performance.baseline_avg_delay_days)} to "
+                    f"{num(performance.recent_avg_delay_days)} days; the on-time delivery rate went from "
+                    f"{pct(performance.baseline_on_time_rate, 0)} to {pct(performance.recent_on_time_rate, 0)}.",
+                ),
+            }
+        )
         risk = Risk(
             company_id=supplier.company_id,
-            title=title,
-            description=(
-                f"Average delivery delay rose from {performance.baseline_avg_delay_days:.1f} to "
-                f"{performance.recent_avg_delay_days:.1f} days; on-time rate fell from "
-                f"{performance.baseline_on_time_rate:.0%} to {performance.recent_on_time_rate:.0%}."
-            ),
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             severity=RiskSeverity.HIGH if performance.recent_avg_delay_days >= 4 else RiskSeverity.MEDIUM,
             status=RiskStatus.OPEN,
             related_entity_type=RelatedEntityType.SUPPLIER,
@@ -232,8 +262,7 @@ class RiskDetectionService:
         if trend.trend != "declining":
             return None
 
-        title = f"Customer decline: {customer.name}"
-        if self._has_open_risk_of_kind("Customer decline", RelatedEntityType.CUSTOMER, customer_id):
+        if self._has_open_risk_of_kind(CUSTOMER_DECLINE, RelatedEntityType.CUSTOMER, customer_id):
             return None
 
         signal_event = BusinessEvent(
@@ -248,13 +277,22 @@ class RiskDetectionService:
         )
         self.event_bus.publish(signal_event)
 
+        texts = both(
+            lambda: {
+                "title": CUSTOMER_DECLINE.title(customer.name),
+                "description": tx(
+                    f"Le chiffre d'affaires de {customer.name} a baissé de {pct(abs(trend.variation_pct))} "
+                    f"(de {money(trend.baseline_revenue, 0)} à {money(trend.recent_revenue, 0)}) : risque de perte du client.",
+                    f"Revenue from {customer.name} fell by {pct(abs(trend.variation_pct))} "
+                    f"(from {money(trend.baseline_revenue, 0)} to {money(trend.recent_revenue, 0)}): risk of losing the customer.",
+                ),
+            }
+        )
         risk = Risk(
             company_id=customer.company_id,
-            title=title,
-            description=(
-                f"Revenue from {customer.name} fell {abs(trend.variation_pct):.1%} "
-                f"(from {trend.baseline_revenue:.0f} to {trend.recent_revenue:.0f}) -- possible churn risk."
-            ),
+            title=texts["fr"]["title"],
+            description=texts["fr"]["description"],
+            i18n=texts,
             severity=RiskSeverity.HIGH if trend.variation_pct <= -0.35 else RiskSeverity.MEDIUM,
             status=RiskStatus.OPEN,
             related_entity_type=RelatedEntityType.CUSTOMER,

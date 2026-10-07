@@ -77,7 +77,7 @@ def test_risk_created_creates_a_pending_validation_task(db_session, event_bus):
 
     assert task is not None
     assert task.status == TaskStatus.PENDING_VALIDATION
-    assert task.title == f"Review: {risk.title}"
+    assert task.title == f"À examiner : {risk.title}"
     assert "20%" in task.title
 
 

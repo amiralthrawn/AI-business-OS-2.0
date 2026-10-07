@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.core.entities import BusinessContext, EventLogEntry
 
 DEFAULT_MONITORED_DOMAINS = ["procurement", "finance", "sales"]
@@ -119,8 +120,9 @@ class BusinessContextService:
                     field="notification_level",
                     current_value=context.notification_level,
                     suggested_value="high",
-                    reason=f"You approved every one of the last {approved} proposed actions -- "
-                    "consider surfacing more of them proactively.",
+                    reason=tx(f"Vous avez approuvé chacune des {approved} dernières actions proposées : "
+                    "l'OS pourrait vous en proposer davantage de lui-même.", f"You approved each of the last {approved} proposed actions: "
+                    "the OS could propose more of them on its own."),
                     evidence_count=approved,
                 )
             )
@@ -130,8 +132,9 @@ class BusinessContextService:
                     field="notification_level",
                     current_value=context.notification_level,
                     suggested_value="low",
-                    reason=f"You rejected every one of the last {rejected} proposed actions -- "
-                    "consider reducing how often the OS proposes this kind of action.",
+                    reason=tx(f"Vous avez rejeté chacune des {rejected} dernières actions proposées : "
+                    "l'OS pourrait proposer ce type d'action moins souvent.", f"You rejected each of the last {rejected} proposed actions: "
+                    "the OS could propose this type of action less often."),
                     evidence_count=rejected,
                 )
             )

@@ -117,7 +117,7 @@ async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> 
 async function getJSON<T>(path: string, notFoundMessage: string): Promise<T> {
   const res = await apiFetch(`${API_URL}${path}`, { cache: "no-store" });
   if (!res.ok) {
-    throw new Error(res.status === 404 ? notFoundMessage : `Request failed (${res.status})`);
+    throw new Error(res.status === 404 ? notFoundMessage : `La requête a échoué (${res.status})`);
   }
   return res.json();
 }
@@ -144,12 +144,12 @@ export async function getHomeView(): Promise<HomeResponse> {
   return res.json();
 }
 
-export const getRisks = () => getJSON<RiskRead[]>("/intelligence/risks", "Risks not found");
-export const getRisk = (id: string) => getJSON<RiskRead>(`/intelligence/risks/${id}`, "Risk not found");
-export const getOpportunities = () => getJSON<OpportunityRead[]>("/intelligence/opportunities", "Opportunities not found");
+export const getRisks = () => getJSON<RiskRead[]>("/intelligence/risks", "Risques introuvables");
+export const getRisk = (id: string) => getJSON<RiskRead>(`/intelligence/risks/${id}`, "Risque introuvable");
+export const getOpportunities = () => getJSON<OpportunityRead[]>("/intelligence/opportunities", "Opportunités introuvables");
 export const getOpportunity = (id: string) =>
-  getJSON<OpportunityRead>(`/intelligence/opportunities/${id}`, "Opportunity not found");
-export const getTasks = () => getJSON<TaskRead[]>("/actions/tasks", "Tasks not found");
+  getJSON<OpportunityRead>(`/intelligence/opportunities/${id}`, "Opportunité introuvable");
+export const getTasks = () => getJSON<TaskRead[]>("/actions/tasks", "Tâches introuvables");
 
 export async function askAI(question: string, context?: { objectType: string; objectId: string }): Promise<AskAIResponse> {
   const res = await apiFetch(`${API_URL}/ai/ask`, {
@@ -221,45 +221,45 @@ export async function createTask(payload: TaskCreate): Promise<TaskRead> {
 // --- "Vie de l'entreprise" (Step 27) -----------------------------------------
 
 export const getOSActivity = (domain?: string, limit = 30) =>
-  getJSON<OSActivityItem[]>(`/home/activity?limit=${limit}${domain ? `&domain=${domain}` : ""}`, "Activity not found");
+  getJSON<OSActivityItem[]>(`/home/activity?limit=${limit}${domain ? `&domain=${domain}` : ""}`, "Activité introuvable");
 export const getCompanyNarrative = (limit = 30) =>
-  getJSON<CompanyNarrativeItem[]>(`/home/narrative?limit=${limit}`, "Narrative not found");
+  getJSON<CompanyNarrativeItem[]>(`/home/narrative?limit=${limit}`, "Fil d'activité indisponible");
 
 // --- Business Domain read APIs (Step 23B) -----------------------------------
 
-export const getSuppliers = () => getJSON<SupplierListItem[]>("/suppliers", "Suppliers not found");
-export const getSupplier = (id: string) => getJSON<SupplierDetail>(`/suppliers/${id}`, "Supplier not found");
-export const getCustomers = () => getJSON<CustomerListItem[]>("/customers", "Customers not found");
-export const getCustomer = (id: string) => getJSON<CustomerDetail>(`/customers/${id}`, "Customer not found");
-export const getProducts = () => getJSON<ProductListItem[]>("/products", "Products not found");
-export const getProduct = (id: string) => getJSON<ProductDetail>(`/products/${id}`, "Product not found");
-export const getTransactions = () => getJSON<TransactionRead[]>("/transactions", "Transactions not found");
-export const getTransaction = (id: string) => getJSON<TransactionRead>(`/transactions/${id}`, "Transaction not found");
-export const getContacts = () => getJSON<ContactListItem[]>("/contacts", "Contacts not found");
+export const getSuppliers = () => getJSON<SupplierListItem[]>("/suppliers", "Fournisseurs introuvables");
+export const getSupplier = (id: string) => getJSON<SupplierDetail>(`/suppliers/${id}`, "Fournisseur introuvable");
+export const getCustomers = () => getJSON<CustomerListItem[]>("/customers", "Clients introuvables");
+export const getCustomer = (id: string) => getJSON<CustomerDetail>(`/customers/${id}`, "Client introuvable");
+export const getProducts = () => getJSON<ProductListItem[]>("/products", "Produits introuvables");
+export const getProduct = (id: string) => getJSON<ProductDetail>(`/products/${id}`, "Produit introuvable");
+export const getTransactions = () => getJSON<TransactionRead[]>("/transactions", "Transactions introuvables");
+export const getTransaction = (id: string) => getJSON<TransactionRead>(`/transactions/${id}`, "Transaction introuvable");
+export const getContacts = () => getJSON<ContactListItem[]>("/contacts", "Contacts introuvables");
 
 // --- Connectors (real connection status, Step 28's Contacts page) -----------
 
-export const getConnectors = () => getJSON<{ connectors: ConnectorStatus[] }>("/connectors", "Connectors not found");
+export const getConnectors = () => getJSON<{ connectors: ConnectorStatus[] }>("/connectors", "Connecteurs introuvables");
 
 // --- Business Domain overviews (Step 23B) -----------------------------------
 
-export const getFinanceOverview = () => getJSON<FinanceOverview>("/finance/overview", "Finance overview not found");
+export const getFinanceOverview = () => getJSON<FinanceOverview>("/finance/overview", "Vue Finance indisponible");
 export const getProcurementOverview = () =>
-  getJSON<ProcurementOverview>("/procurement/overview", "Procurement overview not found");
-export const getSalesOverview = () => getJSON<SalesOverview>("/sales/overview", "Sales overview not found");
+  getJSON<ProcurementOverview>("/procurement/overview", "Vue Achats indisponible");
+export const getSalesOverview = () => getJSON<SalesOverview>("/sales/overview", "Vue Ventes indisponible");
 
 // --- Company & Business Context (Step 26) -----------------------------------
 
-export const getCompany = () => getJSON<CompanyRead>("/company", "Company not configured yet");
+export const getCompany = () => getJSON<CompanyRead>("/company", "Aucune entreprise n'est encore configurée");
 export const updateCompany = (payload: CompanyUpdate) =>
-  patchJSON<CompanyRead>("/company", payload, "Failed to update company");
+  patchJSON<CompanyRead>("/company", payload, "Mise à jour de l'entreprise impossible");
 
 export const getBusinessContext = () =>
-  getJSON<BusinessContextRead>("/business-context", "Business context not found");
+  getJSON<BusinessContextRead>("/business-context", "Contexte métier introuvable");
 export const updateBusinessContext = (payload: BusinessContextUpdate) =>
-  patchJSON<BusinessContextRead>("/business-context", payload, "Failed to update business context");
+  patchJSON<BusinessContextRead>("/business-context", payload, "Mise à jour du contexte métier impossible");
 export const getConfigurationSuggestions = () =>
-  getJSON<ConfigurationSuggestionRead[]>("/business-context/suggestions", "No suggestions found");
+  getJSON<ConfigurationSuggestionRead[]>("/business-context/suggestions", "Aucune suggestion");
 
 // ---------------------------------------------------------------------------
 // V2 -- business objects, relationships, transactions (brain/architecture.md)
@@ -291,9 +291,9 @@ function query(params: Record<string, string | number | boolean | string[] | und
 }
 
 // Users & roles
-export const getMe = () => getJSON<MeRead>("/users/me", "Profile not found");
-export const getUsers = () => getJSON<UserProfileRead[]>("/users", "Users not found");
-export const getRoles = () => getJSON<RoleRead[]>("/users/roles", "Roles not found");
+export const getMe = () => getJSON<MeRead>("/users/me", "Profil introuvable");
+export const getUsers = () => getJSON<UserProfileRead[]>("/users", "Profils introuvables");
+export const getRoles = () => getJSON<RoleRead[]>("/users/roles", "Rôles introuvables");
 export const createUser = (payload: { name: string; email?: string; role: Role }) =>
   sendJSON<UserProfileRead>("POST", "/users", payload, "Impossible de créer le profil");
 export const updateUser = (id: string, payload: Partial<Pick<UserProfileRead, "name" | "email" | "role" | "is_active">>) =>
@@ -308,7 +308,7 @@ export const linkObjects = (payload: { source_type: ObjectType; source_id: strin
   sendJSON<{ id: string }>("POST", "/objects/links", payload, "Impossible de lier ces objets");
 
 // Commercial documents
-export const getDocumentsMeta = () => getJSON<DocumentsMeta>("/documents/meta", "Meta not found");
+export const getDocumentsMeta = () => getJSON<DocumentsMeta>("/documents/meta", "Référentiel des documents indisponible");
 export const listDocuments = (params: { kind?: DocumentKind[]; domain?: "sales" | "procurement"; status?: string; open_only?: boolean; customer_id?: string; supplier_id?: string; q?: string } = {}) =>
   getJSON<DocumentSummary[]>(`/documents${query(params)}`, "Documents introuvables");
 export const getDocument = (id: string) => getJSON<DocumentDetail>(`/documents/${id}`, "Document introuvable");

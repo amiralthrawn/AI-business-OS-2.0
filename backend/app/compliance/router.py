@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import text_of, tx
 from app.access.deps import CurrentUser, require
 from app.access.policy import VIEW_COMPLIANCE, WRITE_COMPLIANCE
 from app.ai.llm import LLMClient, get_llm_client
@@ -40,13 +41,13 @@ class ExpertIn(BaseModel):
 def _task(db: Session, company: Company, task_id: uuid.UUID) -> Task:
     task = db.get(Task, task_id)
     if task is None or task.company_id != company.id or task.domain != service.COMPLIANCE_DOMAIN:
-        raise HTTPException(status_code=404, detail="Demande introuvable")
+        raise HTTPException(status_code=404, detail=tx("Demande introuvable", "Request not found"))
     return task
 
 
 @router.get("/categories")
 def categories() -> dict:
-    return {k: v[0] for k, v in service.CATEGORIES.items()}
+    return {k: service.category_label(k) for k in service.CATEGORIES}
 
 
 @router.get("/requests")
@@ -80,14 +81,20 @@ def ask_expert(
     task = _task(db, company, task_id)
     expert = db.get(Supplier, supplier_id)
     if expert is None or expert.company_id != company.id or expert.supplier_kind == "goods":
-        raise HTTPException(status_code=404, detail="Cabinet introuvable")
+        raise HTTPException(status_code=404, detail=tx("Cabinet introuvable", "Firm not found"))
     draft = compose_draft(db, event_bus, llm, company, purpose="expert_request", object_type="supplier", object_id=expert.id)
-    draft.subject = f"Demande d'intervention — {task.title}"
-    draft.body = (
-        f"Bonjour,\n\nNous souhaiterions votre intervention sur le sujet suivant : {task.title}.\n\n"
-        f"{task.description or '[Décrire la demande]'}\n\n"
+    # A draft in the interface language; the person reviews and edits it before any sending (HITL).
+    title, description = text_of(task, "title"), text_of(task, "description")
+    draft.subject = tx(f"Demande d'intervention — {title}", f"Request for assistance — {title}")
+    draft.body = tx(
+        f"Bonjour,\n\nNous souhaiterions votre intervention sur le sujet suivant : {title}.\n\n"
+        f"{description or '[Décrire la demande]'}\n\n"
         + (f"Échéance souhaitée : {task.due_at.date().isoformat()}.\n\n" if task.due_at else "")
-        + f"Pourriez-vous nous indiquer vos disponibilités et une estimation de vos honoraires ?\n\nBien cordialement,\n{company.name}"
+        + f"Pourriez-vous nous indiquer vos disponibilités et une estimation de vos honoraires ?\n\nBien cordialement,\n{company.name}",
+        f"Hello,\n\nWe would like your assistance on the following matter: {title}.\n\n"
+        f"{description or '[Describe the request]'}\n\n"
+        + (f"Desired deadline: {task.due_at.date().isoformat()}.\n\n" if task.due_at else "")
+        + f"Could you let us know your availability and an estimate of your fees?\n\nBest regards,\n{company.name}",
     )
     db.commit()
     create_link(db, company_id=company.id, source_type="communication", source_id=draft.id, target_type="task", target_id=task.id, relation="concerns", origin="system")
@@ -98,15 +105,15 @@ def ask_expert(
 def list_experts(db: Session = Depends(get_db), company: Company = Depends(current_company)) -> list[dict]:
     experts = db.query(Supplier).filter(Supplier.company_id == company.id, Supplier.supplier_kind != "goods").order_by(Supplier.name).all()
     return [
-        {"id": e.id, "name": e.name, "kind": e.supplier_kind, "kind_label": service.EXPERT_KIND_LABELS.get(e.supplier_kind, e.supplier_kind), "fee_rate_min": e.fee_rate_min, "fee_rate_max": e.fee_rate_max, "country": e.country}
+        {"id": e.id, "name": e.name, "kind": e.supplier_kind, "kind_label": service.expert_kind_label(e.supplier_kind), "fee_rate_min": e.fee_rate_min, "fee_rate_max": e.fee_rate_max, "country": e.country}
         for e in experts
     ]
 
 
 @router.post("/experts")
 def add_expert(payload: ExpertIn, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_COMPLIANCE))) -> dict:
-    if payload.supplier_kind not in service.EXPERT_KIND_LABELS:
-        raise HTTPException(status_code=400, detail="Type de cabinet inconnu")
+    if payload.supplier_kind not in service.EXPERT_KINDS:
+        raise HTTPException(status_code=400, detail=tx("Type de cabinet inconnu", "Unknown firm type"))
     expert = Supplier(company_id=company.id, name=payload.name, country=payload.country, supplier_kind=payload.supplier_kind, fee_rate_min=payload.fee_rate_min, fee_rate_max=payload.fee_rate_max, certifications=[])
     db.add(expert)
     db.flush()

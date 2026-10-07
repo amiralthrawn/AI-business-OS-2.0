@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.core.entities import Product, ProductSupplier, StockKind, StockPosition, Supplier, ValueBasis
 from app.core.events.bus import EventBus
 from app.core.events.business_event import BusinessEvent
@@ -57,7 +58,7 @@ def create_product(session: Session, company_id: uuid.UUID, data: dict) -> Produ
 def update_product(session: Session, product: Product, changes: dict) -> Product:
     for key, value in changes.items():
         if key not in PRODUCT_FIELDS:
-            raise CatalogError(f"Champ non modifiable : {key}")
+            raise CatalogError(tx(f"Champ non modifiable : {key}", f"Field cannot be changed: {key}"))
         setattr(product, key, value)
     if changes.get("supplier_id"):
         # The preferred supplier must also be a supplier of the product.
@@ -70,14 +71,14 @@ def update_product(session: Session, product: Product, changes: dict) -> Product
 def upsert_product_supplier(session: Session, product: Product, supplier_id: uuid.UUID, terms: dict, *, commit: bool = True) -> ProductSupplier:
     supplier = session.get(Supplier, supplier_id)
     if supplier is None or supplier.company_id != product.company_id:
-        raise CatalogError("Fournisseur introuvable")
+        raise CatalogError(tx("Fournisseur introuvable", "Supplier not found"))
     row = session.query(ProductSupplier).filter_by(product_id=product.id, supplier_id=supplier_id).first()
     if row is None:
         row = ProductSupplier(company_id=product.company_id, product_id=product.id, supplier_id=supplier_id, certifications=[])
         session.add(row)
     for key, value in terms.items():
         if key not in TERMS_FIELDS:
-            raise CatalogError(f"Condition inconnue : {key}")
+            raise CatalogError(tx(f"Condition inconnue : {key}", f"Unknown term: {key}"))
         setattr(row, key, value)
     if row.lead_time_min_days is not None and row.lead_time_basis in (None, ValueBasis.UNKNOWN):
         row.lead_time_basis = ValueBasis.DECLARED
@@ -118,9 +119,9 @@ def upsert_stock_position(
     commit: bool = True,
 ) -> StockPosition:
     if kind == StockKind.SUPPLIER and supplier_id is None:
-        raise CatalogError("Un stock fournisseur doit préciser le fournisseur")
+        raise CatalogError(tx("Un stock fournisseur doit préciser le fournisseur", "A supplier stock must name the supplier"))
     if kind == StockKind.PHYSICAL and basis not in {ValueBasis.OBSERVED, ValueBasis.DECLARED, ValueBasis.ESTIMATED}:
-        raise CatalogError("Nature de quantité invalide pour un stock physique")
+        raise CatalogError(tx("Nature de quantité invalide pour un stock physique", "Invalid quantity type for a physical stock"))
     position = (
         session.query(StockPosition)
         .filter_by(product_id=product.id, kind=kind, supplier_id=supplier_id, location=location or "")
@@ -198,23 +199,23 @@ def import_stock_csv(session: Session, event_bus: EventBus | None, company_id: u
                 session.query(Product).filter(Product.company_id == company_id, Product.name.ilike(ref)).first()
             )
         if product is None:
-            result.errors.append(f"Ligne {i} : produit « {ref or '?'} » introuvable")
+            result.errors.append(tx(f"Ligne {i} : produit « {ref or '?'} » introuvable", f'Line {i}: product "{ref or "?"}" not found'))
             continue
         try:
             kind = StockKind(row.get("kind", "physical").lower())
         except ValueError:
-            result.errors.append(f"Ligne {i} : type de stock « {row.get('kind')} » inconnu")
+            result.errors.append(tx(f"Ligne {i} : type de stock « {row.get('kind')} » inconnu", f'Line {i}: unknown stock type "{row.get("kind")}"'))
             continue
         try:
             quantity = float(row.get("quantity", "").replace(",", "."))
         except ValueError:
-            result.errors.append(f"Ligne {i} : quantité invalide")
+            result.errors.append(tx(f"Ligne {i} : quantité invalide", f"Line {i}: invalid quantity"))
             continue
         supplier_id = None
         if row.get("supplier"):
             supplier = session.query(Supplier).filter(Supplier.company_id == company_id, Supplier.name.ilike(row["supplier"])).first()
             if supplier is None:
-                result.errors.append(f"Ligne {i} : fournisseur « {row['supplier']} » introuvable")
+                result.errors.append(tx(f"Ligne {i} : fournisseur « {row['supplier']} » introuvable", f'Line {i}: supplier "{row["supplier"]}" not found'))
                 continue
             supplier_id = supplier.id
         try:

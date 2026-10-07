@@ -765,3 +765,27 @@ status buttons say "Enregistrer …"; an approved email marks an order
 411/401/512/601/706 are examples until the accountant confirms them
 (`finance_settings.accounting_refs`); open questions are listed in
 `brain/billing.md`. No journal, no VAT, no FEC.
+
+## 56. French only, until a real bilingual version exists (V2.3)
+
+Most visible text (pages, backend analyses, risks, decisions, labels) is
+French; an EN switch translating only the chrome produced a mixed
+interface. The switch is removed and the locale fixed to French (the i18n
+dictionary keeps its English column for later). The V1 rules now write
+French (risk/opportunity titles and descriptions, review tasks, suggestions,
+margin explanations, API errors); risk kinds are recognised from French or
+legacy English titles (app/intelligence/risks/kinds.py) so de-duplication and
+the Snapshot keep working; migration e7a1c2f4b9d3 rewrites the English texts
+already stored (only known generated patterns). API enum values are always
+rendered through one dictionary (frontend lib/labels.ts valueLabel). Real
+business data (names, demo emails received in English) is left as is.
+
+## 57. An analysis reads Objet -> Analyse & solution -> Action & résultat
+
+Risk, opportunity and Decision Intelligence views share one structure
+(components/intelligence/AnalysisLevels.tsx): what is observed; why it
+matters and what the OS recommends (Interpretation, Decision options,
+confidence); what the user can do (HITL buttons, contact, task from an
+option) and the RESULT read only from the tasks really attached to the
+subject -- never simulated. The global assistant (topbar) is the same
+Orchestrator (POST /ai/ask) with the page's object as context.

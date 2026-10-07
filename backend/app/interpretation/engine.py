@@ -40,7 +40,8 @@ from app.ai.orchestrator.service import _resolve_entity_by_ref
 from app.core.entities import EventLogEntry, RelatedEntityType
 from app.core.events.bus import EventBus
 from app.core.events.business_event import BusinessEvent
-from app.core.observable_labels import DOMAIN_LABEL_FR, IMPACT_LABEL_FR, observable_label
+from app.core.i18n import both, current_locale, llm_language, tx, use_locale
+from app.core.observable_labels import domain_label, impact_label, observable_label
 from app.interpretation.context import assemble_context
 from app.observation.engine import OBSERVATION_DETECTED
 
@@ -85,6 +86,8 @@ class Interpretation:
     observations_used: list[dict]
     capabilities_consulted: list[str]
     source_observation_event_id: uuid.UUID
+    # {"fr": {title, explanation, recommendation}, "en": {...}} (brain/decisions.md #58)
+    i18n: dict | None = None
 
 
 def _confidence_level(baseline_confidence: str) -> ConfidenceLevel:
@@ -127,17 +130,18 @@ def classify(payload: dict) -> tuple[InterpretationType, ConfidenceLevel]:
 
 
 def _title(interpretation_type: InterpretationType, payload: dict) -> str:
-    """A short, human-facing title -- French, and never the raw Observable
-    identifier (Step 27: a machine field name like "delivery_delay_days"
-    must never reach the UI; see app.core.observable_labels)."""
+    """A short, human-facing title in the active language, never the raw
+    Observable identifier (Step 27: a machine field name like
+    "delivery_delay_days" must never reach the UI; see
+    app.core.observable_labels)."""
 
     entity_name = payload.get("entity_name")
     label = observable_label(payload.get("observable"))
     return {
-        "risk": f"{entity_name} — écart défavorable sur {label}",
-        "opportunity": f"{entity_name} — amélioration sur {label}",
-        "insight": f"{entity_name} — anomalie sur {label} à surveiller",
-        "observation": f"{entity_name} — anomalie détectée sur {label}",
+        "risk": tx(f"{entity_name} — écart défavorable sur {label}", f"{entity_name} — unfavourable deviation in {label}"),
+        "opportunity": tx(f"{entity_name} — amélioration sur {label}", f"{entity_name} — improvement in {label}"),
+        "insight": tx(f"{entity_name} — anomalie sur {label} à surveiller", f"{entity_name} — anomaly in {label} to watch"),
+        "observation": tx(f"{entity_name} — anomalie détectée sur {label}", f"{entity_name} — anomaly detected in {label}"),
     }[interpretation_type]
 
 
@@ -157,17 +161,23 @@ def _recommendation(interpretation_type: InterpretationType, payload: dict) -> s
     # wasn't confident enough to call this a Risk or Opportunity, so it must
     # not manufacture a confident-sounding recommendation either.
     entity_name = payload.get("entity_name")
-    domain = DOMAIN_LABEL_FR.get(payload.get("domain"), payload.get("domain"))
+    domain = domain_label(payload.get("domain"))
     label = observable_label(payload.get("observable"))
     if interpretation_type == "risk":
-        return f"Examiner {entity_name} ({domain}) et envisager une tâche pour investiguer l'écart sur {label} avant qu'il ne s'aggrave."
+        return tx(
+            f"Examiner {entity_name} ({domain}) et envisager une tâche pour investiguer l'écart sur {label} avant qu'il ne s'aggrave.",
+            f"Review {entity_name} ({domain}) and consider a task to investigate the deviation in {label} before it gets worse.",
+        )
     if interpretation_type == "opportunity":
-        return f"Envisager de renforcer la relation avec {entity_name} pour capitaliser sur l'amélioration de {label}."
+        return tx(
+            f"Envisager de renforcer la relation avec {entity_name} pour capitaliser sur l'amélioration de {label}.",
+            f"Consider strengthening the relationship with {entity_name} to build on the improvement in {label}.",
+        )
     return None
 
 
 def _deterministic_explanation(interpretation_type: InterpretationType, payload: dict) -> str:
-    """A clean, honest French sentence built directly from the same
+    """A clean, honest sentence (active language) built directly from the same
     structured data an LLM would have received -- used only when no real
     LLM is configured (see app.ai.llm.DeterministicLLMClient), so the MVP
     never shows a raw JSON/prompt dump in place of an explanation (Step 27).
@@ -180,20 +190,33 @@ def _deterministic_explanation(interpretation_type: InterpretationType, payload:
     reference the actual message" feature) -- the fallback must not lose
     that real information just because there is no LLM to call."""
 
-    entity_name = payload.get("entity_name") or "Cette entité"
+    entity_name = payload.get("entity_name") or tx("Cette entité", "This entity")
     label = observable_label(payload.get("observable"))
-    impact = IMPACT_LABEL_FR.get(payload.get("impact"), payload.get("impact"))
+    impact = impact_label(payload.get("impact"))
     sentences = {
-        "risk": f"{entity_name} présente un écart défavorable sur {label}, avec un impact jugé {impact}.",
-        "opportunity": f"{entity_name} montre une amélioration sur {label}, une opportunité à impact {impact}.",
-        "insight": f"Une anomalie a été repérée sur {label} pour {entity_name} — à surveiller, pas encore confirmée comme un risque ou une opportunité.",
-        "observation": f"Une variation a été observée sur {label} pour {entity_name}, sans référence historique assez fiable pour la qualifier davantage.",
+        "risk": tx(
+            f"{entity_name} présente un écart défavorable sur {label}, avec un impact jugé {impact}.",
+            f"{entity_name} shows an unfavourable deviation in {label}, with an impact assessed as {impact}.",
+        ),
+        "opportunity": tx(
+            f"{entity_name} montre une amélioration sur {label}, une opportunité à impact {impact}.",
+            f"{entity_name} shows an improvement in {label}, an opportunity with {impact} impact.",
+        ),
+        "insight": tx(
+            f"Une anomalie a été repérée sur {label} pour {entity_name} — à surveiller, pas encore confirmée comme un risque ou une opportunité.",
+            f"An anomaly was spotted in {label} for {entity_name} — to watch, not yet confirmed as a risk or an opportunity.",
+        ),
+        "observation": tx(
+            f"Une variation a été observée sur {label} pour {entity_name}, sans référence historique assez fiable pour la qualifier davantage.",
+            f"A variation was observed in {label} for {entity_name}, without a reliable enough history to qualify it further.",
+        ),
     }
     sentence = sentences[interpretation_type]
 
+    # The subject of a real message is source data: quoted, never translated.
     message_subject = (payload.get("extra_context") or {}).get("message_subject")
     if message_subject:
-        sentence += f" Message concerné : « {message_subject} »."
+        sentence += tx(f" Message concerné : « {message_subject} ».", f' Related message: "{message_subject}".')
     return sentence
 
 
@@ -207,7 +230,8 @@ def _explain(llm: LLMClient, context: dict, interpretation_type: InterpretationT
         "company -- strictly from that data, never inventing a number or fact not present in it. "
         f"This event has already been classified as '{interpretation_type}' by a deterministic "
         "rule; do not propose a different classification, only explain in one or two sentences "
-        "why the data supports it and what it implies. Respond in French."
+        "why the data supports it and what it implies. "
+        + llm_language()
     )
     user_prompt = f"Business Event interpretation context:\n{json.dumps(context, indent=2, default=str)}"
     return llm.complete(system_prompt=system_prompt, user_prompt=user_prompt)
@@ -230,7 +254,16 @@ def interpret_event(
     context, capabilities_consulted = assemble_context(
         session, event_bus, capability_registry, llm, company_id, entry
     )
-    explanation = _explain(llm, context, interpretation_type, payload)
+    # Generated in both interface languages (brain/decisions.md #58): the
+    # user may switch language after the analysis was produced, and the AI
+    # text itself -- not a translation of it -- must then be in that language.
+    texts = both(
+        lambda: {
+            "title": _title(interpretation_type, payload),
+            "explanation": _explain(llm, context, interpretation_type, payload),
+            "recommendation": _recommendation(interpretation_type, payload),
+        }
+    )
 
     observations_used = [
         {
@@ -245,10 +278,10 @@ def interpret_event(
 
     return Interpretation(
         type=interpretation_type,
-        title=_title(interpretation_type, payload),
-        explanation=explanation,
+        title=texts["fr"]["title"],
+        explanation=texts["fr"]["explanation"],
         potential_impact=_potential_impact(payload),
-        recommendation=_recommendation(interpretation_type, payload),
+        recommendation=texts["fr"]["recommendation"],
         confidence=confidence,
         domain=payload.get("domain"),
         entity_type=RelatedEntityType(payload["entity_type"]),
@@ -258,6 +291,7 @@ def interpret_event(
         observations_used=observations_used,
         capabilities_consulted=capabilities_consulted,
         source_observation_event_id=entry.event_id,
+        i18n=texts,
     )
 
 
@@ -277,7 +311,53 @@ def _interpretation_payload(interpretation: Interpretation) -> dict:
         "observations_used": interpretation.observations_used,
         "capabilities_consulted": interpretation.capabilities_consulted,
         "source_observation_event_id": str(interpretation.source_observation_event_id),
+        "i18n": interpretation.i18n,
     }
+
+
+def _legacy_explanation(payload: dict) -> str | None:
+    """For an analysis stored before both languages were kept: the
+    deterministic sentence in the active language, but only when the stored
+    French text is exactly that sentence -- an LLM-written explanation is
+    never replaced by a template."""
+
+    stored = payload.get("explanation")
+    observed = (payload.get("observations_used") or [{}])[0]
+    subject = None
+    if stored and "« " in stored:
+        subject = stored.rsplit("« ", 1)[1].rsplit(" »", 1)[0]
+    for impact in ("high", "medium", "low"):
+        source = {**observed, "entity_name": payload.get("entity_name"), "observable": payload.get("observable"), "impact": impact}
+        if subject:
+            source["extra_context"] = {"message_subject": subject}
+        with use_locale("fr"):
+            if _deterministic_explanation(payload["type"], source) != stored:
+                continue
+        return _deterministic_explanation(payload["type"], source)
+    return None
+
+
+def localize_interpretation(payload: dict) -> dict:
+    """An EventInterpreted payload with its texts in the active language."""
+
+    out = dict(payload)
+    entry = (payload.get("i18n") or {}).get(current_locale())
+    if entry:
+        out.update(entry)
+        return out
+    kind = payload.get("type")
+    if kind not in ("risk", "opportunity", "insight", "observation"):
+        return out
+    with use_locale("fr"):
+        fr_title, fr_recommendation = _title(kind, payload), _recommendation(kind, payload)
+    if payload.get("title") == fr_title:
+        out["title"] = _title(kind, payload)
+    if payload.get("recommendation") == fr_recommendation:
+        out["recommendation"] = _recommendation(kind, payload)
+    explanation = _legacy_explanation(payload)
+    if explanation is not None:
+        out["explanation"] = explanation
+    return out
 
 
 def _already_interpreted(session: Session, observation_event_id: uuid.UUID) -> bool:

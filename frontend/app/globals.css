@@ -136,11 +136,52 @@ body {
   animation: chart-draw 1.1s cubic-bezier(0.16, 0.84, 0.44, 1) forwards;
 }
 
+
+/* Assistant IA (topbar): a soft breathing halo, the panel sliding in. */
+@keyframes ai-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(91, 79, 214, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(91, 79, 214, 0);
+  }
+}
+.animate-ai-glow {
+  animation: ai-glow 2.8s ease-in-out infinite;
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+.animate-drawer-in {
+  animation: drawer-in 0.28s cubic-bezier(0.16, 0.84, 0.44, 1) both;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-reveal,
   .animate-flow,
   .animate-pop,
-  .animate-chart-draw {
+  .animate-chart-draw,
+  .animate-ai-glow,
+  .animate-drawer-in,
+  .animate-fade-in {
     animation: none;
     stroke-dashoffset: 0;
   }

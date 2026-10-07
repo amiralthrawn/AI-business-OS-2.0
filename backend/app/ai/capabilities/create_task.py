@@ -24,6 +24,8 @@ class CreateTaskInput(BaseModel):
     related_entity_id: uuid.UUID | None = None
     correlation_id: uuid.UUID | None = None
     agent: str | None = None
+    # Both interface languages of a system-written title/description (app.core.i18n).
+    i18n: dict | None = None
 
 
 class CreateTaskOutput(BaseModel):
@@ -50,6 +52,7 @@ def _execute(session: Session, event_bus: EventBus | None, data: CreateTaskInput
         company_id=data.company_id,
         title=data.title,
         description=data.description,
+        i18n=data.i18n,
         related_entity_type=data.related_entity_type,
         related_entity_id=data.related_entity_id,
         pending_action="create_task",

@@ -12,6 +12,7 @@ from app.catalog.router import router as catalog_router
 from app.communications.router import router as communications_router
 from app.company.router import router as company_router
 from app.config import get_settings
+from app.core.i18n import LocaleMiddleware
 from app.connectors.router import router as connectors_router
 from app.data.router import router as data_router
 from app.database import engine
@@ -70,6 +71,9 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# Interface language of each request (Accept-Language, FR / EN): app.core.i18n.
+app.add_middleware(LocaleMiddleware)
 
 app.include_router(business_context_router)
 app.include_router(company_router)

@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
+from app.core.i18n import money, num, text_of, tx
 from app.core.entities import (
     Candidate,
     CommercialDocument,
@@ -29,7 +30,7 @@ from app.core.entities import (
     Task,
     Transaction,
 )
-from app.transactions.lifecycle import KINDS, status_label
+from app.transactions.lifecycle import KINDS, kind_label, status_label
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,11 @@ def _doc(d: CommercialDocument) -> ObjectSummary:
         type="commercial_document",
         id=d.id,
         title=d.number + (f" · {d.title}" if d.title else ""),
-        subtitle=d.external_reference and f"Réf. externe {d.external_reference}",
+        subtitle=d.external_reference and tx(f"Réf. externe {d.external_reference}", f"External ref. {d.external_reference}"),
         status=d.status,
         status_label=status_label(d.kind, d.status),
         kind=d.kind.value,
-        kind_label=spec.label,
+        kind_label=kind_label(d.kind),
         href=f"/documents/{d.id}",
         domain=spec.domain,
         date=d.issued_at or d.created_at,
@@ -71,21 +72,21 @@ def _doc(d: CommercialDocument) -> ObjectSummary:
 def _customer(c: Customer) -> ObjectSummary:
     return ObjectSummary(
         "customer", c.id, c.name, c.country, c.status,
-        {"prospect": "Prospect", "active": "Client actif", "inactive": "Inactif"}.get(c.status, c.status),
-        None, "Client", f"/data/customers/{c.id}", "sales", c.created_at,
+        {"prospect": tx("Prospect", "Prospect"), "active": tx("Client actif", "Active customer"), "inactive": tx("Inactif", "Inactive")}.get(c.status, c.status),
+        None, tx("Client", "Customer"), f"/data/customers/{c.id}", "sales", c.created_at,
     )  # fmt: skip
 
 
 def _supplier(s: Supplier) -> ObjectSummary:
     return ObjectSummary(
-        "supplier", s.id, s.name, s.country, None, None, None, "Fournisseur",
+        "supplier", s.id, s.name, s.country, None, None, None, tx("Fournisseur", "Supplier"),
         f"/data/suppliers/{s.id}", "procurement", s.created_at,
     )  # fmt: skip
 
 
 def _product(p: Product) -> ObjectSummary:
     return ObjectSummary(
-        "product", p.id, p.name, p.sku and f"Réf. {p.sku}", None, None, None, "Produit",
+        "product", p.id, p.name, p.sku and tx(f"Réf. {p.sku}", f"Ref. {p.sku}"), None, None, None, tx("Produit", "Product"),
         f"/data/products/{p.id}", "catalog", p.created_at,
     )  # fmt: skip
 
@@ -98,24 +99,24 @@ def _contact(c: Contact) -> ObjectSummary:
 
 
 def _communication(c: Communication) -> ObjectSummary:
-    labels = {"received": "Reçu", "sent": "Envoyé", "draft": "Brouillon", "pending_validation": "À valider", "rejected": "Refusé"}
+    labels = {"received": tx("Reçu", "Received"), "sent": tx("Envoyé", "Sent"), "draft": tx("Brouillon", "Draft"), "pending_validation": tx("À valider", "To approve"), "rejected": tx("Refusé", "Rejected")}
     return ObjectSummary(
-        "communication", c.id, c.subject or "(sans objet)", c.from_address if c.direction.value == "inbound" else c.to_address,
+        "communication", c.id, c.subject or tx("(sans objet)", "(no subject)"), c.from_address if c.direction.value == "inbound" else c.to_address,
         c.status, labels.get(c.status, c.status), c.channel,
-        {"email": "Email", "calendar": "Rendez-vous", "website": "Site web", "social": "Réseau social"}.get(c.channel, c.channel),
+        {"email": "Email", "calendar": tx("Rendez-vous", "Meeting"), "website": tx("Site web", "Website"), "social": tx("Réseau social", "Social network")}.get(c.channel, c.channel),
         f"/communications?message={c.id}", "communications", c.occurred_at,
     )  # fmt: skip
 
 
 def _file(d: Document) -> ObjectSummary:
-    return ObjectSummary("document", d.id, d.title, d.document_type, None, None, None, "Fichier", d.url, None, d.created_at)
+    return ObjectSummary("document", d.id, d.title, d.document_type, None, None, None, tx("Fichier", "File"), d.url, None, d.created_at)
 
 
 def _transaction(t: Transaction) -> ObjectSummary:
-    labels = {"sales_order": "Vente", "purchase_order": "Achat", "invoice": "Facture"}
+    labels = {"sales_order": tx("Vente", "Sale"), "purchase_order": tx("Achat", "Purchase"), "invoice": tx("Facture", "Invoice")}
     return ObjectSummary(
-        "transaction", t.id, f"{labels.get(t.type.value, t.type.value)} · {t.amount:,.0f} {t.currency}".replace(",", " "),
-        _fmt_date(t.occurred_at), t.status.value, None, t.type.value, "Écriture",
+        "transaction", t.id, f"{labels.get(t.type.value, t.type.value)} · {money(t.amount, 0) if t.currency == 'EUR' else f'{num(t.amount, 0)} {t.currency}'}",
+        _fmt_date(t.occurred_at), t.status.value, None, t.type.value, tx("Écriture", "Entry"),
         f"/documents/{t.source_document_id}" if t.source_document_id else "/data/transactions",
         "finance", t.occurred_at,
     )  # fmt: skip
@@ -123,21 +124,21 @@ def _transaction(t: Transaction) -> ObjectSummary:
 
 def _task(t: Task) -> ObjectSummary:
     return ObjectSummary(
-        "task", t.id, t.title, t.description and t.description[:80], t.status.value, None, None, "Tâche",
+        "task", t.id, text_of(t, "title"), (text_of(t, "description") or "")[:80] or None, t.status.value, None, None, tx("Tâche", "Task"),
         f"/actions/tasks?task={t.id}", "actions", t.created_at,
     )  # fmt: skip
 
 
 def _risk(r: Risk) -> ObjectSummary:
     return ObjectSummary(
-        "risk", r.id, r.title, None, r.status.value, None, r.severity.value, "Risque",
+        "risk", r.id, text_of(r, "title"), None, r.status.value, None, r.severity.value, tx("Risque", "Risk"),
         f"/intelligence/risks/{r.id}", "intelligence", r.created_at,
     )  # fmt: skip
 
 
 def _opportunity(o: Opportunity) -> ObjectSummary:
     return ObjectSummary(
-        "opportunity", o.id, o.title, None, o.status.value, None, None, "Opportunité",
+        "opportunity", o.id, text_of(o, "title"), None, o.status.value, None, None, tx("Opportunité", "Opportunity"),
         f"/intelligence/opportunities/{o.id}", "intelligence", o.created_at,
     )  # fmt: skip
 
@@ -145,15 +146,15 @@ def _opportunity(o: Opportunity) -> ObjectSummary:
 def _employee(e: Employee) -> ObjectSummary:
     return ObjectSummary(
         "employee", e.id, e.full_name, " · ".join(filter(None, [e.job_title, e.department])) or None, e.status,
-        {"active": "Actif", "on_leave": "En congé", "left": "Parti"}.get(e.status, e.status), None, "Employé",
+        {"active": tx("Actif", "Active"), "on_leave": tx("En congé", "On leave"), "left": tx("Parti", "Left")}.get(e.status, e.status), None, tx("Employé", "Employee"),
         f"/people/{e.id}", "people", e.hired_at,
     )  # fmt: skip
 
 
 def _candidate(c: Candidate) -> ObjectSummary:
-    labels = {"new": "Nouveau", "shortlisted": "Présélectionné", "interview_proposed": "Entretien proposé", "rejected": "Écarté", "hired": "Recruté"}
+    labels = {"new": tx("Nouveau", "New"), "shortlisted": tx("Présélectionné", "Shortlisted"), "interview_proposed": tx("Entretien proposé", "Interview proposed"), "rejected": tx("Écarté", "Rejected"), "hired": tx("Recruté", "Hired")}
     return ObjectSummary(
-        "candidate", c.id, c.full_name, c.applied_for, c.status, labels.get(c.status, c.status), None, "Candidat",
+        "candidate", c.id, c.full_name, c.applied_for, c.status, labels.get(c.status, c.status), None, tx("Candidat", "Candidate"),
         f"/people?tab=recruitment&candidate={c.id}", "people", c.created_at,
     )  # fmt: skip
 

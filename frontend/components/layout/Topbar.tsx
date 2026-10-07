@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import LanguageSwitcher from "@/components/layout/LanguageSwitcher";
+import { Suspense } from "react";
+import AssistantDrawer from "@/components/ai/AssistantDrawer";
 import ProfileSwitcher from "@/components/layout/ProfileSwitcher";
 import { type LabelKey, useLocale } from "@/lib/i18n";
 import type { MeRead, UserProfileRead } from "@/lib/types";
@@ -55,8 +56,8 @@ export default function Topbar({
   const { t } = useLocale();
 
   return (
-    <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-border bg-surface px-5 md:px-10">
-      <div className="flex items-center gap-3">
+    <header className="grid h-[72px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-border bg-surface px-5 md:px-10">
+      <div className="flex min-w-0 items-center gap-3">
         <button
           type="button"
           onClick={onMenuClick}
@@ -67,15 +68,19 @@ export default function Topbar({
             <line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="17" x2="20" y2="17" />
           </svg>
         </button>
-        <div className="flex items-center gap-2 text-[13.5px]">
-          <span className="hidden text-text-faint sm:inline">{companyName ?? "AI Business OS"}</span>
-          <span className="hidden text-border-strong sm:inline">/</span>
-          <span className="font-semibold text-text">{titleFor(pathname, t)}</span>
+        <div className="flex min-w-0 items-center gap-2 text-[13.5px]">
+          <span className="hidden truncate text-text-faint lg:inline">{companyName ?? "AI Business OS"}</span>
+          <span className="hidden text-border-strong lg:inline">/</span>
+          <span className="truncate font-semibold text-text">{titleFor(pathname, t)}</span>
         </div>
       </div>
 
-      <div className="flex items-center gap-3.5">
-        <LanguageSwitcher />
+      {/* The OS assistant, centred and reachable from every page. */}
+      <Suspense fallback={null}>
+        <AssistantDrawer />
+      </Suspense>
+
+      <div className="flex items-center justify-end gap-3.5">
         <Link
           href="/actions/tasks"
           className="relative flex h-[34px] w-[34px] items-center justify-center rounded-[10px] bg-surface-sunken text-text-soft"
@@ -89,13 +94,6 @@ export default function Topbar({
               {pendingCount}
             </span>
           )}
-        </Link>
-        <Link
-          href="/ai/ask-ai"
-          className="hidden items-center gap-1.5 rounded-[10px] border-[1.5px] border-border-strong px-3.5 py-2 text-[13px] font-semibold text-text hover:border-text-faint sm:inline-flex"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8L12 2Z" /></svg>
-          {t("nav.ask_ai")}
         </Link>
         <ProfileSwitcher me={me} users={users} fallbackLabel={companyName ?? "OS"} />
       </div>

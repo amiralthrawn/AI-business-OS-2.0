@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user, require
 from app.access.policy import VIEW_OWNERSHIP, VIEW_TREASURY, WRITE_TREASURY
 from app.core.entities import BankAccount, BusinessContext, CashMovement, Company, Shareholder, ValueBasis
@@ -70,7 +71,7 @@ def overview(db: Session = Depends(get_db), company: Company = Depends(current_c
 @treasury_router.post("/accounts")
 def add_account(payload: AccountIn, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_TREASURY))) -> dict:
     if payload.kind not in {"current", "savings", "card", "loan"}:
-        raise HTTPException(status_code=400, detail="Type de compte inconnu")
+        raise HTTPException(status_code=400, detail=tx("Type de compte inconnu", "Unknown account type"))
     try:
         masked = service.mask_identifier(payload.identifier, payload.kind)
     except service.TreasuryError as exc:
@@ -88,7 +89,7 @@ def add_account(payload: AccountIn, db: Session = Depends(get_db), company: Comp
 @treasury_router.post("/movements")
 def add_movement(payload: MovementIn, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_TREASURY))) -> dict:
     if payload.direction not in {"in", "out"} or payload.status not in {"actual", "planned", "estimated"} or payload.amount <= 0:
-        raise HTTPException(status_code=400, detail="Flux invalide (sens in/out, statut actual/planned/estimated, montant > 0)")
+        raise HTTPException(status_code=400, detail=tx("Flux invalide (sens in/out, statut actual/planned/estimated, montant > 0)", "Invalid flow (direction in/out, status actual/planned/estimated, amount > 0)"))
     movement = CashMovement(company_id=company.id, source="manual", **payload.model_dump())
     db.add(movement)
     db.commit()
@@ -116,7 +117,7 @@ def company_overview(db: Session = Depends(get_db), company: Company = Depends(c
 @ownership_router.post("/shareholders")
 def add_shareholder(payload: ShareholderIn, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_TREASURY))) -> dict:
     if payload.shares <= 0:
-        raise HTTPException(status_code=400, detail="Nombre de parts invalide")
+        raise HTTPException(status_code=400, detail=tx("Nombre de parts invalide", "Invalid number of shares"))
     holder = Shareholder(company_id=company.id, **payload.model_dump())
     db.add(holder)
     db.commit()
@@ -127,7 +128,7 @@ def add_shareholder(payload: ShareholderIn, db: Session = Depends(get_db), compa
 def update_settings(payload: FinanceSettingsIn, db: Session = Depends(get_db), company: Company = Depends(current_company), _: CurrentUser = Depends(require(WRITE_TREASURY))) -> dict:
     ctx = db.query(BusinessContext).filter_by(company_id=company.id).first()
     if ctx is None:
-        raise HTTPException(status_code=404, detail="Business context not configured")
+        raise HTTPException(status_code=404, detail=tx("Contexte métier non configuré", "Business context not configured"))
     settings = dict(ctx.finance_settings or {})
     settings.update(payload.model_dump(exclude_unset=True))
     ctx.finance_settings = settings

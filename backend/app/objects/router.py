@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user
 from app.access.policy import DOMAIN_VIEW_PERMISSION, OBJECT_VIEW_PERMISSION, WRITE_COMMUNICATIONS
 from app.core.entities import CommercialDocument, Company, Contact, Customer, Product, Supplier
@@ -36,14 +37,14 @@ def object_context(
     user: CurrentUser = Depends(get_current_user),
 ) -> dict:
     if obj_type not in OBJECT_TYPES:
-        raise HTTPException(status_code=404, detail=f"Type d'objet inconnu : {obj_type}")
+        raise HTTPException(status_code=404, detail=tx(f"Type d'objet inconnu : {obj_type}", f"Unknown object type: {obj_type}"))
     try:
         context = build_context(db, user, obj_type, obj_id).to_dict()
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     needed = DOMAIN_VIEW_PERMISSION.get(context["object"]["domain"]) if obj_type == "commercial_document" else OBJECT_VIEW_PERMISSION.get(obj_type)
     if needed and not user.can(needed):
-        raise HTTPException(status_code=403, detail="Votre profil n'a pas accès à cet objet.")
+        raise HTTPException(status_code=403, detail=tx("Votre profil n'a pas accès à cet objet.", "Your profile does not have access to this object."))
     # Related objects the profile cannot open are not listed (no dead links, no leak).
     context["related"] = [g for g in context["related"] if not OBJECT_VIEW_PERMISSION.get(g["type"]) or user.can(OBJECT_VIEW_PERMISSION[g["type"]])]
     return context
@@ -94,7 +95,7 @@ def link_objects(
     user: CurrentUser = Depends(get_current_user),
 ) -> dict:
     if not user.can(WRITE_COMMUNICATIONS):
-        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas de lier des objets.")
+        raise HTTPException(status_code=403, detail=tx("Votre rôle ne permet pas de lier des objets.", "Your role does not allow linking objects."))
     try:
         link = create_link(db, company_id=company.id, event_bus=event_bus, **payload.model_dump())
     except LinkError as exc:
@@ -105,7 +106,7 @@ def link_objects(
 @router.delete("/links/{link_id}")
 def unlink_objects(link_id: uuid.UUID, db: Session = Depends(get_db), user: CurrentUser = Depends(get_current_user)) -> dict:
     if not user.can(WRITE_COMMUNICATIONS):
-        raise HTTPException(status_code=403, detail="Votre rôle ne permet pas de modifier des liens.")
+        raise HTTPException(status_code=403, detail=tx("Votre rôle ne permet pas de modifier des liens.", "Your role does not allow changing links."))
     try:
         delete_link(db, link_id)
     except LinkError as exc:

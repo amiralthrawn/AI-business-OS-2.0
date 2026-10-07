@@ -71,8 +71,9 @@ def test_risk_is_traceable_to_its_source_event(db_session, event_bus):
 
     assert risk.source_event_id == event.event_id
     assert risk.severity == RiskSeverity.HIGH
-    assert "130.0" in risk.description
-    assert "100.0" in risk.description
+    # French amounts (decision #56); the event itself is traced by source_event_id.
+    assert "130,00" in risk.description
+    assert "100,00" in risk.description
 
 
 def test_risk_created_is_published_with_full_traceability(db_session, event_bus):

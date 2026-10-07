@@ -12,6 +12,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import { getEmployee, getMe, getObjectContext } from "@/lib/api";
 import { CONFIDENCE_LABEL, can, fmtDate, fmtMoneyRange, yearsSince } from "@/lib/objects";
 import type { Confidence, EmployeeDetail, ValueBasis } from "@/lib/types";
+import { valueLabel } from "@/lib/labels";
 
 export const dynamic = "force-dynamic";
 
@@ -119,7 +120,7 @@ export default async function EmployeePage({ params }: { params: Promise<{ id: s
             {e.task_list.map((t) => (
               <li key={t.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-2.5 text-[13px]">
                 <Link href={`/actions/tasks?task=${t.id}`} className="text-text hover:underline">{t.title}</Link>
-                <span className="text-[12px] text-text-faint">{t.status} · échéance <span className="num">{fmtDate(t.due_at)}</span></span>
+                <span className="text-[12px] text-text-faint">{valueLabel("taskStatus", t.status)} · échéance <span className="num">{fmtDate(t.due_at)}</span></span>
               </li>
             ))}
           </ul>

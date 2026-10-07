@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, Enum, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.entities.base import Base, IdMixin, LinkableMixin, TimestampMixin
@@ -29,3 +29,6 @@ class Risk(Base, IdMixin, TimestampMixin, LinkableMixin):
     severity: Mapped[RiskSeverity] = mapped_column(Enum(RiskSeverity), nullable=False, index=True)
     status: Mapped[RiskStatus] = mapped_column(Enum(RiskStatus), nullable=False, default=RiskStatus.OPEN, index=True)
     source_event_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    # Generated text in both interface languages, {"fr": {"title", "description"}, "en": {...}}
+    # (app.core.i18n, brain/decisions.md #58); None for a text a person wrote.
+    i18n: Mapped[dict | None] = mapped_column(JSON, nullable=True)

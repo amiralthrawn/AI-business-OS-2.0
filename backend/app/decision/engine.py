@@ -41,6 +41,7 @@ from app.ai.orchestrator.service import _resolve_entity_by_ref
 from app.core.entities import EventLogEntry, Opportunity, OpportunityStatus, RelatedEntityType, Risk, RiskStatus
 from app.core.events.bus import EventBus
 from app.core.events.business_event import BusinessEvent
+from app.core.i18n import both, current_locale, llm_language, tx, use_locale
 from app.interpretation.context import assemble_context
 from app.interpretation.engine import EVENT_INTERPRETED
 from app.observation.engine import OBSERVATION_DETECTED
@@ -54,110 +55,110 @@ DECISION_PROPOSED = "DecisionProposed"
 # ("Investigate renegotiation + alternative supplier", skipping "absorb the
 # cost"). A domain this MVP doesn't cover falls back to the "finance" entry,
 # the most generic of the three.
-_RISK_OPTIONS: dict[str, list[dict[str, str]]] = {
+_RISK_OPTIONS: dict[str, list[dict[str, dict[str, str]]]] = {
     "procurement": [
         {
-            "label": "Renégocier les prix ou les conditions directement avec {entity_name}",
-            "expected_benefit": "Pourrait restaurer la marge sans perturber la relation fournisseur.",
-            "trade_offs": "Dépend de la volonté de {entity_name} de renégocier ; peut prendre du temps.",
+            "label": {"fr": "Renégocier les prix ou les conditions directement avec {entity_name}", "en": "Renegotiate prices or terms directly with {entity_name}"},
+            "expected_benefit": {"fr": "Pourrait restaurer la marge sans perturber la relation fournisseur.", "en": "Could restore the margin without disrupting the supplier relationship."},
+            "trade_offs": {"fr": "Dépend de la volonté de {entity_name} de renégocier ; peut prendre du temps.", "en": "Depends on {entity_name}'s willingness to renegotiate; may take time."},
         },
         {
-            "label": "Rechercher un fournisseur alternatif pour le ou les produits concernés",
-            "expected_benefit": "Réduit la dépendance à un fournisseur unique et l'exposition future au même risque.",
-            "trade_offs": "Changer de fournisseur implique un coût, un risque et un délai d'intégration.",
+            "label": {"fr": "Rechercher un fournisseur alternatif pour le ou les produits concernés", "en": "Look for an alternative supplier for the products concerned"},
+            "expected_benefit": {"fr": "Réduit la dépendance à un fournisseur unique et l'exposition future au même risque.", "en": "Reduces dependence on a single supplier and future exposure to the same risk."},
+            "trade_offs": {"fr": "Changer de fournisseur implique un coût, un risque et un délai d'intégration.", "en": "Switching suppliers means onboarding cost, risk and lead time."},
         },
         {
-            "label": "Absorber temporairement le coût et réévaluer à la prochaine revue",
-            "expected_benefit": "Aucune perturbation immédiate ; laisse le temps de rassembler plus de données.",
-            "trade_offs": "L'écart persiste entre-temps et peut se reproduire ou s'aggraver.",
+            "label": {"fr": "Absorber temporairement le coût et réévaluer à la prochaine revue", "en": "Absorb the cost for now and reassess at the next review"},
+            "expected_benefit": {"fr": "Aucune perturbation immédiate ; laisse le temps de rassembler plus de données.", "en": "No immediate disruption; leaves time to gather more data."},
+            "trade_offs": {"fr": "L'écart persiste entre-temps et peut se reproduire ou s'aggraver.", "en": "The deviation persists meanwhile and may recur or worsen."},
         },
     ],
     "sales": [
         {
-            "label": "Contacter {entity_name} pour comprendre la cause du problème",
-            "expected_benefit": "Traite directement la cause et montre que la relation compte toujours.",
-            "trade_offs": "Demande du temps commercial ; la cause peut être hors du contrôle de l'entreprise.",
+            "label": {"fr": "Contacter {entity_name} pour comprendre la cause du problème", "en": "Contact {entity_name} to understand the cause of the problem"},
+            "expected_benefit": {"fr": "Traite directement la cause et montre que la relation compte toujours.", "en": "Addresses the cause directly and shows the relationship still matters."},
+            "trade_offs": {"fr": "Demande du temps commercial ; la cause peut être hors du contrôle de l'entreprise.", "en": "Takes sales time; the cause may be outside the company's control."},
         },
         {
-            "label": "Proposer une offre de fidélisation ou des conditions ajustées à {entity_name}",
-            "expected_benefit": "Peut inverser ou ralentir le déclin avant qu'il ne devienne permanent.",
-            "trade_offs": "Réduit la marge à court terme sur ce compte ; crée un précédent pour d'autres.",
+            "label": {"fr": "Proposer une offre de fidélisation ou des conditions ajustées à {entity_name}", "en": "Offer {entity_name} a loyalty offer or adjusted terms"},
+            "expected_benefit": {"fr": "Peut inverser ou ralentir le déclin avant qu'il ne devienne permanent.", "en": "Can reverse or slow the decline before it becomes permanent."},
+            "trade_offs": {"fr": "Réduit la marge à court terme sur ce compte ; crée un précédent pour d'autres.", "en": "Reduces short-term margin on this account; sets a precedent for others."},
         },
         {
-            "label": "Réévaluer la priorité et le niveau de support accordés à ce compte",
-            "expected_benefit": "Réalloue l'effort si le compte n'est plus stratégiquement prioritaire.",
-            "trade_offs": "Risque d'accélérer le déclin si le compte perçoit un désengagement.",
+            "label": {"fr": "Réévaluer la priorité et le niveau de support accordés à ce compte", "en": "Reassess the priority and level of support given to this account"},
+            "expected_benefit": {"fr": "Réalloue l'effort si le compte n'est plus stratégiquement prioritaire.", "en": "Reallocates effort if the account is no longer a strategic priority."},
+            "trade_offs": {"fr": "Risque d'accélérer le déclin si le compte perçoit un désengagement.", "en": "May speed up the decline if the account senses disengagement."},
         },
     ],
     "finance": [
         {
-            "label": "Revoir la politique de prix ou la structure de coûts du produit concerné",
-            "expected_benefit": "Cible directement la source de l'écart.",
-            "trade_offs": "Un changement de prix peut affecter la demande ou des contrats existants.",
+            "label": {"fr": "Revoir la politique de prix ou la structure de coûts du produit concerné", "en": "Review the pricing policy or cost structure of the product concerned"},
+            "expected_benefit": {"fr": "Cible directement la source de l'écart.", "en": "Targets the source of the deviation directly."},
+            "trade_offs": {"fr": "Un changement de prix peut affecter la demande ou des contrats existants.", "en": "A price change can affect demand or existing contracts."},
         },
         {
-            "label": "Investiguer directement le facteur de coût ou de revenu en cause",
-            "expected_benefit": "Construit une vision plus claire avant de s'engager sur une solution précise.",
-            "trade_offs": "Prend du temps ; l'écart se poursuit pendant l'investigation.",
+            "label": {"fr": "Investiguer directement le facteur de coût ou de revenu en cause", "en": "Investigate the cost or revenue driver involved directly"},
+            "expected_benefit": {"fr": "Construit une vision plus claire avant de s'engager sur une solution précise.", "en": "Builds a clearer picture before committing to a specific solution."},
+            "trade_offs": {"fr": "Prend du temps ; l'écart se poursuit pendant l'investigation.", "en": "Takes time; the deviation continues during the investigation."},
         },
         {
-            "label": "Surveiller un cycle supplémentaire avant d'agir",
-            "expected_benefit": "Évite de réagir à un signal qui pourrait n'être que temporaire.",
-            "trade_offs": "Retarde la réponse si l'écart s'avère réel et s'aggrave.",
+            "label": {"fr": "Surveiller un cycle supplémentaire avant d'agir", "en": "Monitor one more cycle before acting"},
+            "expected_benefit": {"fr": "Évite de réagir à un signal qui pourrait n'être que temporaire.", "en": "Avoids reacting to a signal that may only be temporary."},
+            "trade_offs": {"fr": "Retarde la réponse si l'écart s'avère réel et s'aggrave.", "en": "Delays the response if the deviation proves real and worsens."},
         },
     ],
 }
 
-_OPPORTUNITY_OPTIONS: dict[str, list[dict[str, str]]] = {
+_OPPORTUNITY_OPTIONS: dict[str, list[dict[str, dict[str, str]]]] = {
     "sales": [
         {
-            "label": "Engager {entity_name} pour développer la relation (vente additionnelle ou croisée)",
-            "expected_benefit": "Capture davantage de valeur sur un compte déjà en croissance.",
-            "trade_offs": "Demande du temps commercial et une offre crédible ; la croissance peut plafonner.",
+            "label": {"fr": "Engager {entity_name} pour développer la relation (vente additionnelle ou croisée)", "en": "Engage {entity_name} to grow the relationship (upsell or cross-sell)"},
+            "expected_benefit": {"fr": "Capture davantage de valeur sur un compte déjà en croissance.", "en": "Captures more value from an account that is already growing."},
+            "trade_offs": {"fr": "Demande du temps commercial et une offre crédible ; la croissance peut plafonner.", "en": "Takes sales time and a credible offer; growth may plateau."},
         },
         {
-            "label": "Proposer un contrat plus long ou à plus fort volume pour sécuriser la croissance",
-            "expected_benefit": "Protège la tendance contre une volatilité future.",
-            "trade_offs": "Peut nécessiter des concessions (prix, conditions) pour être conclu.",
+            "label": {"fr": "Proposer un contrat plus long ou à plus fort volume pour sécuriser la croissance", "en": "Offer a longer or higher-volume contract to secure the growth"},
+            "expected_benefit": {"fr": "Protège la tendance contre une volatilité future.", "en": "Protects the trend against future volatility."},
+            "trade_offs": {"fr": "Peut nécessiter des concessions (prix, conditions) pour être conclu.", "en": "May require concessions (price, terms) to close."},
         },
         {
-            "label": "Allouer plus d'attention commerciale pour soutenir la tendance",
-            "expected_benefit": "Moyen à faible risque de renforcer une tendance déjà positive.",
-            "trade_offs": "Détourne de l'attention et des ressources d'autres comptes.",
+            "label": {"fr": "Allouer plus d'attention commerciale pour soutenir la tendance", "en": "Give the account more sales attention to support the trend"},
+            "expected_benefit": {"fr": "Moyen à faible risque de renforcer une tendance déjà positive.", "en": "A low-to-medium-risk way to reinforce an already positive trend."},
+            "trade_offs": {"fr": "Détourne de l'attention et des ressources d'autres comptes.", "en": "Diverts attention and resources from other accounts."},
         },
     ],
     "procurement": [
         {
-            "label": "Formaliser durablement les conditions améliorées avec {entity_name}",
-            "expected_benefit": "Sécurise l'amélioration avant qu'elle ne s'inverse.",
-            "trade_offs": "Peut nécessiter un engagement plus long que souhaité.",
+            "label": {"fr": "Formaliser durablement les conditions améliorées avec {entity_name}", "en": "Lock in the improved terms with {entity_name} for the long term"},
+            "expected_benefit": {"fr": "Sécurise l'amélioration avant qu'elle ne s'inverse.", "en": "Secures the improvement before it reverses."},
+            "trade_offs": {"fr": "Peut nécessiter un engagement plus long que souhaité.", "en": "May require a longer commitment than desired."},
         },
         {
-            "label": "Explorer une augmentation de volume avec {entity_name} vu la performance actuelle",
-            "expected_benefit": "Tire parti d'un fournisseur actuellement performant.",
-            "trade_offs": "Augmente la dépendance à ce fournisseur unique.",
+            "label": {"fr": "Explorer une augmentation de volume avec {entity_name} vu la performance actuelle", "en": "Explore higher volumes with {entity_name} given current performance"},
+            "expected_benefit": {"fr": "Tire parti d'un fournisseur actuellement performant.", "en": "Makes the most of a supplier that is performing well."},
+            "trade_offs": {"fr": "Augmente la dépendance à ce fournisseur unique.", "en": "Increases dependence on this single supplier."},
         },
         {
-            "label": "Continuer à surveiller pour confirmer que l'amélioration se maintient",
-            "expected_benefit": "Évite de trop s'engager sur une tendance qui pourrait ne pas durer.",
-            "trade_offs": "Retarde la capture du bénéfice si l'amélioration est réelle et durable.",
+            "label": {"fr": "Continuer à surveiller pour confirmer que l'amélioration se maintient", "en": "Keep monitoring to confirm the improvement holds"},
+            "expected_benefit": {"fr": "Évite de trop s'engager sur une tendance qui pourrait ne pas durer.", "en": "Avoids over-committing to a trend that may not last."},
+            "trade_offs": {"fr": "Retarde la capture du bénéfice si l'amélioration est réelle et durable.", "en": "Delays capturing the benefit if the improvement is real and lasting."},
         },
     ],
     "finance": [
         {
-            "label": "Identifier ce qui explique l'amélioration pour le reproduire ailleurs",
-            "expected_benefit": "Transforme une amélioration ponctuelle en pratique reproductible.",
-            "trade_offs": "Demande du temps d'analyse avant tout déploiement plus large.",
+            "label": {"fr": "Identifier ce qui explique l'amélioration pour le reproduire ailleurs", "en": "Identify what explains the improvement to replicate it elsewhere"},
+            "expected_benefit": {"fr": "Transforme une amélioration ponctuelle en pratique reproductible.", "en": "Turns a one-off improvement into a repeatable practice."},
+            "trade_offs": {"fr": "Demande du temps d'analyse avant tout déploiement plus large.", "en": "Takes analysis time before any wider rollout."},
         },
         {
-            "label": "Renforcer l'approche actuelle de prix ou de coûts",
-            "expected_benefit": "Protège le gain avec un effort supplémentaire minimal.",
-            "trade_offs": "Passif ; ne capture pas activement de valeur supplémentaire.",
+            "label": {"fr": "Renforcer l'approche actuelle de prix ou de coûts", "en": "Reinforce the current pricing or cost approach"},
+            "expected_benefit": {"fr": "Protège le gain avec un effort supplémentaire minimal.", "en": "Protects the gain with minimal extra effort."},
+            "trade_offs": {"fr": "Passif ; ne capture pas activement de valeur supplémentaire.", "en": "Passive; does not actively capture extra value."},
         },
         {
-            "label": "Surveiller la durabilité avant de réallouer des ressources",
-            "expected_benefit": "Évite de réallouer l'effort sur une tendance qui pourrait ne pas se confirmer.",
-            "trade_offs": "Retarde l'action sur l'opportunité si elle se confirme réelle.",
+            "label": {"fr": "Surveiller la durabilité avant de réallouer des ressources", "en": "Monitor durability before reallocating resources"},
+            "expected_benefit": {"fr": "Évite de réallouer l'effort sur une tendance qui pourrait ne pas se confirmer.", "en": "Avoids reallocating effort to a trend that may not be confirmed."},
+            "trade_offs": {"fr": "Retarde l'action sur l'opportunité si elle se confirme réelle.", "en": "Delays acting on the opportunity if it proves real."},
         },
     ],
 }
@@ -191,6 +192,16 @@ class Decision:
     entity_id: uuid.UUID
     entity_name: str
     source_interpretation_event_id: uuid.UUID
+    # {"fr": {problem, options, recommendation}, "en": {...}} (brain/decisions.md #58)
+    i18n: dict | None = None
+
+
+def _texts(decision_type: str, problem: str, options: list[DecisionOption], recommendation: DecisionRecommendation) -> dict:
+    return {
+        "problem": problem,
+        "options": [{"label": o.label, "expected_benefit": o.expected_benefit, "trade_offs": o.trade_offs} for o in options],
+        "recommendation": {"chosen_option": recommendation.chosen_option, "reasoning": recommendation.reasoning},
+    }
 
 
 def _build_options(decision_type: str, domain: str, entity_name: str) -> list[DecisionOption]:
@@ -199,14 +210,33 @@ def _build_options(decision_type: str, domain: str, entity_name: str) -> list[De
 
     catalog = _RISK_OPTIONS if decision_type == "risk" else _OPPORTUNITY_OPTIONS
     templates = catalog.get(domain, catalog["finance"])
+    locale = current_locale()
     return [
         DecisionOption(
-            label=t["label"].format(entity_name=entity_name),
-            expected_benefit=t["expected_benefit"].format(entity_name=entity_name),
-            trade_offs=t["trade_offs"].format(entity_name=entity_name),
+            label=t["label"][locale].format(entity_name=entity_name),
+            expected_benefit=t["expected_benefit"][locale].format(entity_name=entity_name),
+            trade_offs=t["trade_offs"][locale].format(entity_name=entity_name),
         )
         for t in templates
     ]
+
+
+def _insufficient_reasoning(entity_name: str) -> str:
+    return tx(
+        f"Les données disponibles sur {entity_name} ne sont pas encore assez fiables pour "
+        "recommander une action précise — la situation continue d'être surveillée.",
+        f"The data available on {entity_name} is not yet reliable enough to recommend a "
+        "specific action — the situation is still being monitored.",
+    )
+
+
+def _combined_reasoning(entity_name: str) -> str:
+    return tx(
+        f"Ces deux leviers combinent une action directe sur {entity_name} et une mesure de "
+        "réduction du risque, sans attendre — l'option la plus prudente à ce stade.",
+        f"These two levers combine direct action on {entity_name} with a risk-reducing "
+        "measure, without waiting — the most prudent option at this stage.",
+    )
 
 
 def _build_recommendation(
@@ -214,17 +244,14 @@ def _build_recommendation(
 ) -> DecisionRecommendation:
     if decision_type not in ("risk", "opportunity") or not options:
         if isinstance(llm, DeterministicLLMClient):
-            reasoning = (
-                f"Les données disponibles sur {entity_name} ne sont pas encore assez fiables pour "
-                "recommander une action précise — la situation continue d'être surveillée."
-            )
-            return DecisionRecommendation(chosen_option=None, reasoning=reasoning)
+            return DecisionRecommendation(chosen_option=None, reasoning=_insufficient_reasoning(entity_name))
 
         system_prompt = (
             "You are the Decision Intelligence assistant inside an AI Business OS. The data below "
             "was not confident enough to be classified as a Risk or an Opportunity. Explain briefly, "
             "strictly from the data, why there isn't enough reliable information yet to recommend a "
-            "specific action -- never invent a fact, and never propose an action anyway. Respond in French."
+            "specific action -- never invent a fact, and never propose an action anyway. "
+            + llm_language()
         )
         reasoning = llm.complete(
             system_prompt=system_prompt, user_prompt=f"Context:\n{json.dumps(context, indent=2, default=str)}"
@@ -238,18 +265,14 @@ def _build_recommendation(
     chosen = f"{options[0].label} + {options[1].label}"
 
     if isinstance(llm, DeterministicLLMClient):
-        reasoning = (
-            f"Ces deux leviers combinent une action directe sur {entity_name} et une mesure de "
-            "réduction du risque, sans attendre — l'option la plus prudente à ce stade."
-        )
-        return DecisionRecommendation(chosen_option=chosen, reasoning=reasoning)
+        return DecisionRecommendation(chosen_option=chosen, reasoning=_combined_reasoning(entity_name))
 
     system_prompt = (
         "You are the Decision Intelligence assistant inside an AI Business OS. Given the structured "
         "context and the numbered options below, explain in one or two sentences why the combined "
         f"option '{chosen}' is recommended -- strictly from the data, never inventing a fact. You are "
         "not deciding anything: a human will review this recommendation before any action is taken. "
-        "Respond in French."
+        + llm_language()
     )
     options_text = "\n".join(
         f"{i + 1}. {o.label} (benefit: {o.expected_benefit}; trade-off: {o.trade_offs})"
@@ -294,11 +317,19 @@ def build_decision(
         "confidence": interp_payload["confidence"],
     }
 
-    options = _build_options(decision_type, domain, entity_name)
-    recommendation = _build_recommendation(llm, context, decision_type, options, entity_name)
+    # Both interface languages, generated -- not translated -- in each one.
+    interp_i18n = interp_payload.get("i18n") or {}
+
+    def render() -> tuple[str, list[DecisionOption], DecisionRecommendation]:
+        problem = (interp_i18n.get(current_locale()) or {}).get("title") or interp_payload["title"]
+        options = _build_options(decision_type, domain, entity_name)
+        return problem, options, _build_recommendation(llm, context, decision_type, options, entity_name)
+
+    rendered = both(render)
+    problem, options, recommendation = rendered["fr"]
 
     return Decision(
-        problem=interp_payload["title"],
+        problem=problem,
         type=decision_type,
         options=options,
         potential_impact=interp_payload["potential_impact"],
@@ -311,6 +342,7 @@ def build_decision(
         entity_id=uuid.UUID(interp_payload["entity_id"]),
         entity_name=entity_name,
         source_interpretation_event_id=interpretation_entry.event_id,
+        i18n={locale: _texts(decision_type, *parts) for locale, parts in rendered.items()},
     )
 
 
@@ -335,7 +367,41 @@ def _decision_payload(decision: Decision) -> dict:
         "entity_id": str(decision.entity_id),
         "entity_name": decision.entity_name,
         "source_interpretation_event_id": str(decision.source_interpretation_event_id),
+        "i18n": decision.i18n,
     }
+
+
+def localize_decision(payload: dict) -> dict:
+    """A DecisionProposed payload with its texts in the active language.
+    One stored before both languages were kept is re-rendered from the
+    option catalog only where its French text is exactly the catalog's (an
+    LLM-written reasoning stays as it was written)."""
+
+    from app.interpretation.engine import localize_interpretation
+
+    out = dict(payload)
+    entry = (payload.get("i18n") or {}).get(current_locale())
+    if entry:
+        out.update(entry)
+        return out
+    kind, domain, name = payload.get("type"), payload.get("domain"), payload.get("entity_name")
+    observable = (payload.get("data_used") or [{}])[0].get("observable")
+    title = localize_interpretation({"type": kind, "title": payload.get("problem"), "entity_name": name, "observable": observable, "domain": domain})
+    out["problem"] = title["title"]
+    with use_locale("fr"):
+        fr_options = _build_options(kind, domain, name)
+    if [o["label"] for o in payload.get("options", [])] == [o.label for o in fr_options]:
+        options = _build_options(kind, domain, name)
+        out["options"] = [{"label": o.label, "expected_benefit": o.expected_benefit, "trade_offs": o.trade_offs} for o in options]
+        rec = dict(payload.get("recommendation") or {})
+        if options and rec.get("chosen_option") == f"{fr_options[0].label} + {fr_options[1].label}":
+            rec["chosen_option"] = f"{options[0].label} + {options[1].label}"
+        with use_locale("fr"):
+            fr_reasonings = {_combined_reasoning(name): _combined_reasoning, _insufficient_reasoning(name): _insufficient_reasoning}
+        if rec.get("reasoning") in fr_reasonings:
+            rec["reasoning"] = fr_reasonings[rec["reasoning"]](name)
+        out["recommendation"] = rec
+    return out
 
 
 def _already_decided(session: Session, interpretation_event_id: uuid.UUID) -> bool:
@@ -402,12 +468,19 @@ def _maybe_propose_action(
     if _already_covered_by_existing_flow(session, decision.entity_id):
         return None
 
+    def task_text(locale: str) -> dict:
+        texts = (decision.i18n or {}).get(locale) or _texts(decision.type, decision.problem, decision.options, decision.recommendation)
+        rec = texts["recommendation"]
+        label = "Recommandation" if locale == "fr" else "Recommended"
+        sep = " :" if locale == "fr" else ":"
+        return {"title": texts["problem"], "description": f"{label}{sep} {rec['chosen_option']}\n\n{rec['reasoning']}"}
+
+    texts = {locale: task_text(locale) for locale in ("fr", "en")}
     task = ActionsService(session, event_bus).propose_task(
         company_id=company_id,
-        title=decision.problem,
-        description=(
-            f"Recommended: {decision.recommendation.chosen_option}\n\n{decision.recommendation.reasoning}"
-        ),
+        title=texts["fr"]["title"],
+        description=texts["fr"]["description"],
+        i18n=texts,
         related_entity_type=decision.entity_type,
         related_entity_id=decision.entity_id,
         correlation_id=decision.source_interpretation_event_id,

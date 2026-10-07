@@ -98,3 +98,74 @@ export const CAPABILITY_LABEL_FR: Record<string, string> = {
   list_priorities: "les priorités actuelles",
   create_task: "la création d'une tâche",
 };
+
+
+// ---------------------------------------------------------------------------
+// Business values coming from the API (enums), in French -- ONE dictionary
+// for every component (brain/decisions.md #56). Never render a raw value:
+// `valueLabel(group, value)`; an unknown value falls back to itself so a new
+// backend value is visible (and caught by the FR audit) rather than hidden.
+// ---------------------------------------------------------------------------
+
+export const VALUE_LABELS = {
+  severity: { low: "faible", medium: "moyenne", high: "élevée", critical: "critique" },
+  confidence: { low: "faible", medium: "moyenne", high: "élevée", none: "aucune" },
+  signal: {
+    risk: "Risque",
+    opportunity: "Opportunité",
+    insight: "Signal à surveiller",
+    observation: "Observation",
+    decision: "Décision",
+    interpretation: "Interprétation",
+  },
+  domain: {
+    finance: "Finance",
+    procurement: "Achats",
+    sales: "Ventes",
+    operations: "Opérations",
+    people: "Équipe",
+    compliance: "Conformité",
+    website: "Site web",
+    marketing: "Marketing",
+    hr: "RH",
+    company: "Entreprise",
+    deals: "Affaires",
+  },
+  signalStatus: { open: "ouvert", acknowledged: "pris en compte", resolved: "résolu", pursued: "poursuivie", dismissed: "écartée" },
+  taskStatus: {
+    pending_validation: "en attente de validation",
+    open: "à faire",
+    in_progress: "en cours",
+    done: "terminée",
+    cancelled: "annulée",
+    rejected: "rejetée",
+    executed: "exécutée",
+  },
+  entity: {
+    supplier: "fournisseur",
+    customer: "client",
+    product: "produit",
+    transaction: "transaction",
+    company: "entreprise",
+    contact: "contact",
+    communication: "message",
+    commercial_document: "document",
+    employee: "employé",
+    candidate: "candidat",
+  },
+  trend: {
+    growing: "en croissance",
+    declining: "en baisse",
+    stable: "stable",
+    improving: "en amélioration",
+    deteriorating: "en dégradation",
+    insufficient_data: "données insuffisantes",
+  },
+} as const;
+
+export type ValueGroup = keyof typeof VALUE_LABELS;
+
+export function valueLabel(group: ValueGroup, value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  return (VALUE_LABELS[group] as Record<string, string>)[value] ?? value;
+}

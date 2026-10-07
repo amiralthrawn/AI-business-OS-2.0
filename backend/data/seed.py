@@ -122,7 +122,7 @@ def seed(session: Session, event_bus: EventBus) -> dict:
         monitored_domains=["procurement", "finance", "sales"],
         home_focus=["priorities", "risks", "opportunities"],
         notification_level="normal",
-        stated_objectives="Protect margin on core products and reduce single-supplier dependency.",
+        stated_objectives="Protéger la marge sur les produits clés et réduire la dépendance à un fournisseur unique.",
         declared_baselines={
             "margin_pct": 0.30,
             "customer_revenue_variation_pct": 0.05,

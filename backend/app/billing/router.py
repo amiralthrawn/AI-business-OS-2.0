@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.i18n import tx
 from app.access.deps import CurrentUser, get_current_user, require
 from app.access.policy import VIEW_FINANCE, VIEW_PROCUREMENT, VIEW_SALES, WRITE_FINANCE, WRITE_OPERATIONS, WRITE_SALES
 from app.billing import service
@@ -65,7 +66,7 @@ class NonConformityIn(BaseModel):
 def _doc(db: Session, company: Company, doc_id: uuid.UUID) -> CommercialDocument:
     doc = db.get(CommercialDocument, doc_id)
     if doc is None or doc.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Document introuvable")
+        raise HTTPException(status_code=404, detail=tx("Document introuvable", "Document not found"))
     return doc
 
 
@@ -79,7 +80,7 @@ def _guard(fn, db: Session):
 
 def _require_any(user: CurrentUser, *permissions: str) -> None:
     if not any(user.can(p) for p in permissions):
-        raise HTTPException(status_code=403, detail="Votre profil n'a pas accès à ces informations.")
+        raise HTTPException(status_code=403, detail=tx("Votre profil n'a pas accès à ces informations.", "Your profile does not have access to this information."))
 
 
 @router.get("/overview")
@@ -92,7 +93,7 @@ def customer_account(customer_id: uuid.UUID, db: Session = Depends(get_db), comp
     _require_any(user, VIEW_FINANCE, VIEW_SALES)
     customer = db.get(Customer, customer_id)
     if customer is None or customer.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Client introuvable")
+        raise HTTPException(status_code=404, detail=tx("Client introuvable", "Customer not found"))
     return service.party_account(db, company.id, customer_id=customer_id)
 
 
@@ -101,7 +102,7 @@ def supplier_account(supplier_id: uuid.UUID, db: Session = Depends(get_db), comp
     _require_any(user, VIEW_FINANCE, VIEW_PROCUREMENT)
     supplier = db.get(Supplier, supplier_id)
     if supplier is None or supplier.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Fournisseur introuvable")
+        raise HTTPException(status_code=404, detail=tx("Fournisseur introuvable", "Supplier not found"))
     return service.party_account(db, company.id, supplier_id=supplier_id)
 
 
@@ -135,7 +136,7 @@ def allocate_payment(
 ) -> dict:
     movement = db.get(CashMovement, movement_id)
     if movement is None or movement.company_id != company.id:
-        raise HTTPException(status_code=404, detail="Paiement introuvable")
+        raise HTTPException(status_code=404, detail=tx("Paiement introuvable", "Payment not found"))
     invoice = _doc(db, company, payload.invoice_id)
     _guard(lambda: service.allocate_payment(db, event_bus, movement, invoice), db)
     return service.settlement(db, invoice)
